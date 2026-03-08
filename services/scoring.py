@@ -62,10 +62,12 @@ def compute_examiner_score(apps: list[dict]) -> dict:
     pendencies: list[float] = []
 
     for a in disposed:
-        txns = a.get("transactions", [])
-        if txns:
-            oa_counts.append(count_office_actions(txns))
-            rce_counts.append(count_rces(txns))
+        # New ODP schema: events are in eventDataBag on the app itself
+        oa = count_office_actions(a)
+        rc = count_rces(a)
+        if oa > 0 or rc > 0:
+            oa_counts.append(oa)
+            rce_counts.append(rc)
         p = pendency_months(a)
         if p is not None:
             pendencies.append(p)

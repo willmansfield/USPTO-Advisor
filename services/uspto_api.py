@@ -1,133 +1,191 @@
 """
-USPTO API service – wraps PEDS (Patent Examination Data System) and the
-newer Open Data Portal (ODP) endpoints.
+USPTO API service – uses the USPTO Open Data Portal (ODP) REST API.
+Base: https://api.uspto.gov/api/v1/patent/
 
-All calls are made on-the-fly; results are cached only in st.session_state
-(per browser session) to avoid repeated network hits on the same query.
+Auth: api_key query param  +  X-API-KEY header  (both required).
+SSL:  verify=False used because this environment's cert store has a clock-skew
+      issue; remove in production if not needed.
+
+Key ODP response schema (patentFileWrapperDataBag[]):
+  applicationNumberText
+  applicationMetaData:
+    inventionTitle, filingDate, applicationStatusCode (int),
+    applicationStatusDescriptionText, applicationStatusDate,
+    examinerNameText ("LAST, FIRST M"), groupArtUnitNumber ("2143"),
+    firstApplicantName, firstInventorName, cpcClassificationBag
+  eventDataBag[]:  { eventCode, eventDescriptionText, eventDate }
+  assignmentBag[]: { assigneeBag[].assigneeNameText, ... }
+  grantDocumentMetaData: { patentNumber }  (present when granted)
 """
 
+from __future__ import annotations
+
 import time
+import urllib3
 import requests
 import streamlit as st
+
 from config import (
-    PEDS_API_URL, PEDS_TRANSACTION_URL,
-    PTAB_ODP_URL, PTAB_DEVHUB_URL,
-    PAGE_LIMIT, MAX_PAGES,
-    PATENTED_CODES, ABANDONED_CODES,
-    OFFICE_ACTION_CODES, ALLOWANCE_CODES, RCE_CODES,
-    USPTO_API_KEY,
+    USPTO_API_KEY, PAGE_LIMIT, MAX_PAGES,
+    OFFICE_ACTION_CODES, RCE_CODES,
 )
 
-_HEADERS = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}
-_TIMEOUT = 30
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+_BASE      = "https://api.uspto.gov/api/v1/patent"
+_PTAB_URL  = f"{_BASE}/trials/decisions/search"
+_APPS_URL  = f"{_BASE}/applications/search"
+_TIMEOUT   = 20
 
 
-def _auth_params() -> dict:
-    """Return query params dict with API key if configured."""
-    return {"api_key": USPTO_API_KEY} if USPTO_API_KEY else {}
+# ── Auth + low-level HTTP ─────────────────────────────────────────────────────
+
+def _auth() -> tuple[dict, dict]:
+    """Return (params_dict, headers_dict) with credentials."""
+    return (
+        {"api_key": USPTO_API_KEY},
+        {"Accept": "application/json", "X-API-KEY": USPTO_API_KEY},
+    )
 
 
-# ── Low-level PEDS call ───────────────────────────────────────────────────────
-
-def _peds_query(search_text: str, rows: int = PAGE_LIMIT, start: int = 0) -> dict:
-    """POST a Solr-style query to PEDS and return the parsed JSON."""
-    payload = {
-        "searchText": search_text,
-        "qf": "appExamNameText appEarlyPubNumber patentNumber appGroupArtUnitNumber",
-        "fl": "*",
-        "facet": "false",
-        "rows": rows,
-        "start": start,
-    }
-    resp = requests.post(PEDS_API_URL, data=payload, headers=_HEADERS,
-                         params=_auth_params(), timeout=_TIMEOUT)
-    resp.raise_for_status()
-    data = resp.json()
-    return data.get("queryResults", {}).get("searchResponse", {}).get("response", {})
+def _get(url: str, extra_params: dict | None = None) -> dict:
+    p, h = _auth()
+    if extra_params:
+        p.update(extra_params)
+    r = requests.get(url, params=p, headers=h, timeout=_TIMEOUT, verify=False)
+    r.raise_for_status()
+    return r.json()
 
 
-def _safe_peds(search_text: str, rows: int = PAGE_LIMIT, start: int = 0) -> dict:
-    """Wrapper that converts HTTP/network errors into a user-visible Streamlit error."""
+def _apps_query(q: str, limit: int = PAGE_LIMIT, offset: int = 0) -> dict:
+    return _get(_APPS_URL, {"q": q, "limit": limit, "offset": offset})
+
+
+def _safe_query(q: str, limit: int = PAGE_LIMIT, offset: int = 0) -> dict:
     try:
-        return _peds_query(search_text, rows, start)
+        return _apps_query(q, limit, offset)
     except requests.HTTPError as e:
-        st.error(f"USPTO PEDS API error {e.response.status_code}: {e.response.text[:300]}")
-        return {}
+        st.error(f"USPTO API {e.response.status_code}: {e.response.text[:300]}")
     except requests.ConnectionError:
-        st.error("Cannot reach USPTO PEDS API. Check your network connection.")
-        return {}
+        st.error("Cannot reach USPTO API. Check network connection.")
     except Exception as e:
-        st.error(f"Unexpected error querying PEDS: {e}")
-        return {}
+        st.error(f"USPTO API error: {e}")
+    return {}
 
 
-# ── Pagination helper ─────────────────────────────────────────────────────────
-
-def _fetch_all_pages(search_text: str, max_pages: int = MAX_PAGES) -> list[dict]:
-    """
-    Fetch up to max_pages × PAGE_LIMIT records from PEDS.
-    Returns flat list of application dicts.
-    """
-    apps = []
+def _fetch_all(q: str, max_pages: int = MAX_PAGES) -> list[dict]:
+    """Paginate up to max_pages × PAGE_LIMIT records."""
+    records: list[dict] = []
     for page in range(max_pages):
-        start = page * PAGE_LIMIT
-        result = _safe_peds(search_text, rows=PAGE_LIMIT, start=start)
-        if not result:
+        offset = page * PAGE_LIMIT
+        data = _safe_query(q, limit=PAGE_LIMIT, offset=offset)
+        if not data:
             break
-        docs = result.get("docs", [])
-        apps.extend(docs)
-        if start + PAGE_LIMIT >= result.get("numFound", 0):
+        docs = data.get("patentFileWrapperDataBag", [])
+        records.extend(docs)
+        total = data.get("count", 0)
+        if offset + PAGE_LIMIT >= total or not docs:
             break
-        time.sleep(0.2)   # polite pause
-    return apps
+        time.sleep(0.25)
+    return records
 
 
-# ── Public helpers ────────────────────────────────────────────────────────────
+# ── Field helpers ─────────────────────────────────────────────────────────────
+
+def meta(app: dict) -> dict:
+    return app.get("applicationMetaData", {})
+
 
 def get_outcome(app: dict) -> str:
-    """Classify an application as 'patented', 'abandoned', or 'pending'."""
-    code = str(app.get("applicationStatusCode", ""))
-    if app.get("patentNumber") or code in PATENTED_CODES:
+    m    = meta(app)
+    code = m.get("applicationStatusCode")
+    desc = (m.get("applicationStatusDescriptionText") or "").lower()
+
+    if isinstance(code, int) and 150 <= code <= 160:
         return "patented"
-    if code in ABANDONED_CODES:
+    if app.get("grantDocumentMetaData"):
+        return "patented"
+    if "patented" in desc:
+        return "patented"
+    if isinstance(code, int) and code >= 161:
+        return "abandoned"
+    if "abandon" in desc:
         return "abandoned"
     return "pending"
 
 
-def count_office_actions(transactions: list[dict]) -> int:
-    return sum(1 for t in transactions if t.get("eventCode", "") in OFFICE_ACTION_CODES)
+def get_patent_number(app: dict) -> str:
+    gdm = app.get("grantDocumentMetaData") or {}
+    return gdm.get("patentNumber", "")
 
 
-def count_rces(transactions: list[dict]) -> int:
-    return sum(1 for t in transactions if t.get("eventCode", "") in RCE_CODES)
+def get_assignee(app: dict) -> str:
+    name = meta(app).get("firstApplicantName", "")
+    if name:
+        return name
+    for ab in (app.get("assignmentBag") or []):
+        for a in (ab.get("assigneeBag") or []):
+            n = a.get("assigneeNameText", "")
+            if n:
+                return n
+    return ""
+
+
+def count_office_actions(app: dict) -> int:
+    return sum(1 for e in (app.get("eventDataBag") or [])
+               if e.get("eventCode", "") in OFFICE_ACTION_CODES)
+
+
+def count_rces(app: dict) -> int:
+    return sum(1 for e in (app.get("eventDataBag") or [])
+               if e.get("eventCode", "") in RCE_CODES)
 
 
 def pendency_months(app: dict) -> float | None:
-    """Months from filing to disposition (or None if still pending)."""
     from datetime import datetime
-    filing = app.get("appFilingDate") or app.get("applicationFilingDate")
-    end = app.get("patentIssueDate") or app.get("applicationStatusDate")
-    if not filing or not end:
+    m       = meta(app)
+    filing  = m.get("filingDate") or m.get("effectiveFilingDate")
+    end     = m.get("applicationStatusDate")
+    outcome = get_outcome(app)
+    if not filing or not end or outcome == "pending":
         return None
     try:
-        fmt = "%Y-%m-%d"
-        delta = datetime.strptime(end[:10], fmt) - datetime.strptime(filing[:10], fmt)
+        delta = (datetime.strptime(end[:10], "%Y-%m-%d")
+                 - datetime.strptime(filing[:10], "%Y-%m-%d"))
         return round(delta.days / 30.44, 1)
     except Exception:
         return None
 
 
-# ── Examiner search ───────────────────────────────────────────────────────────
+# ── Public search functions ───────────────────────────────────────────────────
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def search_by_examiner(name: str) -> list[dict]:
-    """
-    Return up to MAX_PAGES × PAGE_LIMIT applications assigned to this examiner.
-    Cached per session for 1 hour.
-    """
-    # Try exact match first, then last-name-only
-    for query in [f'appExamNameText:("{name}")', f"appExamNameText:({name})"]:
-        apps = _fetch_all_pages(query)
+    """Fetch applications for an examiner by last name (or 'LAST, FIRST')."""
+    last = name.split(",")[0].strip()
+    for q in [
+        f'applicationMetaData.examinerNameText:"{name.upper()}"',
+        f"applicationMetaData.examinerNameText:{last.upper()}",
+    ]:
+        apps = _fetch_all(q)
+        if apps:
+            return apps
+    return []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def search_by_art_unit(art_unit: str) -> list[dict]:
+    return _fetch_all(f"applicationMetaData.groupArtUnitNumber:{art_unit.strip()}")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def search_by_assignee(assignee: str) -> list[dict]:
+    for q in [
+        f'applicationMetaData.firstApplicantName:"{assignee}"',
+        f'assignmentBag.assigneeBag.assigneeNameText:"{assignee}"',
+        f"applicationMetaData.firstApplicantName:{assignee.split()[0]}",
+    ]:
+        apps = _fetch_all(q)
         if apps:
             return apps
     return []
@@ -135,69 +193,45 @@ def search_by_examiner(name: str) -> list[dict]:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_application(app_num: str) -> dict:
-    """Return full detail for a single application number."""
-    clean = app_num.replace("/", "").replace(",", "").strip()
-    result = _safe_peds(f'patentApplicationNumber:("{clean}")', rows=1)
-    docs = result.get("docs", [])
+    clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
+    data  = _safe_query(f"applicationNumberText:{clean}", limit=1)
+    docs  = data.get("patentFileWrapperDataBag", [])
     return docs[0] if docs else {}
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_transactions(app_num: str) -> list[dict]:
-    """Fetch prosecution transaction history for an application."""
-    clean = app_num.replace("/", "").replace(",", "").strip()
-    url = PEDS_TRANSACTION_URL.format(app_num=clean)
-    try:
-        resp = requests.get(url, headers={"Accept": "application/json"},
-                            params=_auth_params(), timeout=_TIMEOUT)
-        if resp.status_code == 200:
-            return resp.json()
-    except Exception:
-        pass
-    # Fallback: transactions may be embedded in the main doc
     app = get_application(app_num)
-    return app.get("transactions", [])
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def search_by_assignee(assignee: str, max_pages: int = MAX_PAGES) -> list[dict]:
-    return _fetch_all_pages(f'assigneeEntityName:("{assignee}")', max_pages=max_pages)
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def search_by_art_unit(art_unit: str, max_pages: int = MAX_PAGES) -> list[dict]:
-    return _fetch_all_pages(f"appGroupArtUnitNumber:({art_unit})", max_pages=max_pages)
+    return app.get("eventDataBag", [])
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def search_applications(
-    query_str: str = "",
-    app_num: str = "",
-    assignee: str = "",
-    attorney: str = "",
-    art_unit: str = "",
-    status: str = "",
-    rows: int = 50,
+    app_num:   str = "",
+    assignee:  str = "",
+    examiner:  str = "",
+    art_unit:  str = "",
+    status:    str = "",
+    free_text: str = "",
+    rows:      int = 50,
 ) -> list[dict]:
-    """Multi-field application search."""
     parts = []
     if app_num:
-        parts.append(f'patentApplicationNumber:("{app_num.strip()}")')
+        parts.append(f"applicationNumberText:{app_num.replace('/', '').replace(',', '').strip()}")
     if assignee:
-        parts.append(f'assigneeEntityName:("{assignee.strip()}")')
-    if attorney:
-        parts.append(f'appAttyDocketNumber:("{attorney.strip()}")')
+        parts.append(f'applicationMetaData.firstApplicantName:"{assignee.strip()}"')
+    if examiner:
+        parts.append(f"applicationMetaData.examinerNameText:{examiner.strip().split(',')[0].upper()}")
     if art_unit:
-        parts.append(f"appGroupArtUnitNumber:({art_unit.strip()})")
+        parts.append(f"applicationMetaData.groupArtUnitNumber:{art_unit.strip()}")
     if status:
-        parts.append(f'applicationStatusDescriptionText:("{status.strip()}")')
-    if query_str:
-        parts.append(query_str.strip())
+        parts.append(f'applicationMetaData.applicationStatusDescriptionText:"{status.strip()}"')
+    if free_text:
+        parts.append(free_text.strip())
     if not parts:
         return []
-    search = " AND ".join(parts)
-    result = _safe_peds(search, rows=rows)
-    return result.get("docs", [])
+    data = _safe_query(" AND ".join(parts), limit=rows)
+    return data.get("patentFileWrapperDataBag", [])
 
 
 # ── PTAB decisions ────────────────────────────────────────────────────────────
@@ -205,37 +239,21 @@ def search_applications(
 @st.cache_data(ttl=3600, show_spinner=False)
 def search_ptab(
     patent_owner: str = "",
-    petitioner: str = "",
-    art_unit: str = "",
-    rows: int = 25,
+    petitioner:   str = "",
+    rows:         int = 25,
 ) -> list[dict]:
-    """
-    Search PTAB trial decisions.  Tries ODP first, then legacy Developer Hub.
-    """
     params: dict = {"recordTotalQuantity": rows, "recordStartQuantity": 1}
     if patent_owner:
         params["respondentPatentOwnerName"] = patent_owner
     if petitioner:
         params["petitionerPartyName"] = petitioner
-
-    # Try ODP
     try:
-        r = requests.get(PTAB_ODP_URL, params={**params, **_auth_params()},
-                         headers={"Accept": "application/json"}, timeout=_TIMEOUT)
+        p, h = _auth()
+        p.update(params)
+        r = requests.get(_PTAB_URL, params=p, headers=h,
+                         timeout=_TIMEOUT, verify=False)
         if r.status_code == 200:
-            data = r.json()
-            return data.get("results", data.get("decisions", []))
-    except Exception:
-        pass
-
-    # Fallback: Developer Hub PTAB API
-    try:
-        r = requests.get(PTAB_DEVHUB_URL, params={**params, **_auth_params()},
-                         headers={"Accept": "application/json"}, timeout=_TIMEOUT)
-        if r.status_code == 200:
-            data = r.json()
-            return data.get("results", data.get("decisions", []))
-    except Exception:
-        pass
-
+            return r.json().get("patentTrialDocumentDataBag", [])
+    except Exception as e:
+        st.error(f"PTAB API error: {e}")
     return []

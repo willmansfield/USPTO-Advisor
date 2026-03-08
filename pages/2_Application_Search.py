@@ -23,13 +23,12 @@ st.caption("Search USPTO patent applications by multiple criteria.")
 with st.form("app_search_form"):
     col1, col2 = st.columns(2)
     with col1:
-        app_num   = st.text_input("Application Number", placeholder="e.g. 16/123456")
-        assignee  = st.text_input("Assignee / Applicant", placeholder="e.g. Apple Inc")
-        art_unit  = st.text_input("Art Unit", placeholder="e.g. 2143")
+        app_num  = st.text_input("Application Number", placeholder="e.g. 16123456")
+        assignee = st.text_input("Assignee / Applicant", placeholder="e.g. Apple Inc")
+        art_unit = st.text_input("Art Unit", placeholder="e.g. 2143")
     with col2:
-        examiner  = st.text_input("Examiner Name (last)", placeholder="e.g. Smith")
-        attorney  = st.text_input("Attorney Docket #", placeholder="e.g. 12345.001US1")
-        status    = st.selectbox(
+        examiner = st.text_input("Examiner Name (last)", placeholder="e.g. SMITH")
+        status   = st.selectbox(
             "Application Status",
             ["", "Patented Case", "Abandoned", "Pending", "Published"],
         )
@@ -39,19 +38,15 @@ with st.form("app_search_form"):
 if not submitted:
     st.stop()
 
-if not any([app_num, assignee, art_unit, examiner, attorney, status]):
+if not any([app_num, assignee, art_unit, examiner, status]):
     st.warning("Please enter at least one search criterion.")
     st.stop()
 
-# Build query string for examiner (handled separately via PEDS field)
-extra_query = f"appExamNameText:({examiner})" if examiner else ""
-
-with st.spinner("Searching USPTO PEDS…"):
+with st.spinner("Searching USPTO…"):
     apps = uspto_api.search_applications(
-        query_str=extra_query,
         app_num=app_num,
         assignee=assignee,
-        attorney=attorney,
+        examiner=examiner,
         art_unit=art_unit,
         status=status,
         rows=rows,
@@ -64,66 +59,67 @@ if not apps:
 st.success(f"Found {len(apps)} result(s).")
 
 # ── Results table ─────────────────────────────────────────────────────────────
-display_cols = {
-    "patentApplicationNumber": "Application #",
-    "inventionTitle":          "Title",
-    "appFilingDate":           "Filing Date",
-    "appGroupArtUnitNumber":   "Art Unit",
-    "appExamNameText":         "Examiner",
-    "applicationStatusCode":   "Status Code",
-    "applicationStatusDate":   "Status Date",
-    "patentNumber":            "Patent #",
-    "assigneeEntityName":      "Assignee",
-}
+rows_data = []
+for a in apps:
+    m = uspto_api.meta(a)
+    rows_data.append({
+        "App #":        a.get("applicationNumberText", ""),
+        "Title":        m.get("inventionTitle", "")[:60],
+        "Filing Date":  m.get("filingDate", ""),
+        "Art Unit":     m.get("groupArtUnitNumber", ""),
+        "Examiner":     m.get("examinerNameText", ""),
+        "Status":       m.get("applicationStatusDescriptionText", ""),
+        "Status Date":  m.get("applicationStatusDate", ""),
+        "Patent #":     uspto_api.get_patent_number(a),
+        "Assignee":     uspto_api.get_assignee(a)[:40],
+    })
 
-df = pd.DataFrame(apps)
-available = {k: v for k, v in display_cols.items() if k in df.columns}
-df_show = df[list(available.keys())].rename(columns=available)
+df = pd.DataFrame(rows_data)
+if "Filing Date" in df.columns:
+    df["Filing Date"] = pd.to_datetime(df["Filing Date"], errors="coerce")
+    df = df.sort_values("Filing Date", ascending=False)
 
-# Sort by filing date descending if available
-if "Filing Date" in df_show.columns:
-    df_show["Filing Date"] = pd.to_datetime(df_show["Filing Date"], errors="coerce")
-    df_show = df_show.sort_values("Filing Date", ascending=False)
+st.dataframe(df, use_container_width=True, height=500)
 
-st.dataframe(df_show, use_container_width=True, height=500)
-
-# ── Application detail expander ───────────────────────────────────────────────
+# ── Prosecution history detail ────────────────────────────────────────────────
 st.markdown("---")
 st.subheader("View Full Prosecution History")
 sel_num = st.text_input(
-    "Enter an application number from the results above to view its prosecution history:",
-    placeholder="16/123456",
+    "Enter an application number from the results above:",
+    placeholder="16123456",
 )
 if sel_num:
     with st.spinner("Loading prosecution history…"):
-        app_detail = uspto_api.get_application(sel_num)
+        app_detail  = uspto_api.get_application(sel_num)
         transactions = uspto_api.get_transactions(sel_num)
 
     if app_detail:
+        m = uspto_api.meta(app_detail)
         c1, c2, c3 = st.columns(3)
-        c1.metric("Status", app_detail.get("applicationStatusCode", "N/A"))
-        c2.metric("Filing Date", app_detail.get("appFilingDate", "N/A"))
-        c3.metric("Patent #", app_detail.get("patentNumber", "—"))
+        c1.metric("Status",       m.get("applicationStatusDescriptionText", "N/A"))
+        c2.metric("Filing Date",  m.get("filingDate", "N/A"))
+        c3.metric("Patent #",     uspto_api.get_patent_number(app_detail) or "—")
 
-        st.markdown(f"**Title:** {app_detail.get('inventionTitle', 'N/A')}")
-        st.markdown(f"**Examiner:** {app_detail.get('appExamNameText', 'N/A')} &nbsp;|&nbsp; "
-                    f"**Art Unit:** {app_detail.get('appGroupArtUnitNumber', 'N/A')}")
+        st.markdown(f"**Title:** {m.get('inventionTitle', 'N/A')}")
+        st.markdown(
+            f"**Examiner:** {m.get('examinerNameText', 'N/A')} &nbsp;|&nbsp; "
+            f"**Art Unit:** {m.get('groupArtUnitNumber', 'N/A')}"
+        )
 
         if transactions:
             st.subheader("Prosecution Timeline")
             tx_rows = [
                 {
-                    "Date": t.get("recordDate", ""),
-                    "Code": t.get("eventCode", ""),
+                    "Date":  t.get("eventDate", ""),
+                    "Code":  t.get("eventCode", ""),
                     "Event": t.get("eventDescriptionText", ""),
                 }
-                for t in transactions
+                for t in sorted(transactions, key=lambda x: x.get("eventDate", ""))
             ]
-            df_tx = pd.DataFrame(tx_rows).sort_values("Date")
-            st.dataframe(df_tx, use_container_width=True)
+            st.dataframe(pd.DataFrame(tx_rows), use_container_width=True)
         else:
             st.info("Transaction history not available for this application.")
     else:
         st.error(f"Application {sel_num} not found.")
 
-st.caption("Data: USPTO PEDS — live query, updated daily.")
+st.caption("Data: USPTO Open Data Portal (api.uspto.gov) — live query, updated daily.")

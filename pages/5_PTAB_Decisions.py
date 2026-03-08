@@ -1,6 +1,6 @@
 """
 Page 5 – PTAB Decisions
-Search Patent Trial and Appeal Board decisions.
+Search Patent Trial and Appeal Board trial decisions.
 """
 
 import sys
@@ -45,41 +45,38 @@ with st.spinner("Querying USPTO PTAB API…"):
     )
 
 if not decisions:
-    st.warning(
-        "No decisions returned.  "
-        "The PTAB API may require an API key or the endpoint may have changed — "
-        "check the USPTO Open Data Portal at data.uspto.gov."
-    )
+    st.warning("No decisions returned. Check search terms and try again.")
     st.stop()
 
 st.success(f"Found {len(decisions)} decision(s).")
 
 # ── Results table ─────────────────────────────────────────────────────────────
-# PTAB API response structure varies between versions; normalise here.
+# ODP PTAB response: patentTrialDocumentDataBag[]
 def _extract(d: dict) -> dict:
+    tm = d.get("trialMetaData", {})
+    po = d.get("patentOwnerData", {})
+    rp = d.get("regularPetitionerData", {})
     return {
-        "Proceeding #":   d.get("proceedingNumber") or d.get("trialNumber") or "",
-        "Type":           d.get("proceedingTypeCategory") or d.get("proceedingType") or "",
-        "Patent Owner":   d.get("respondentPatentOwnerName") or d.get("patentOwnerName") or "",
-        "Petitioner":     d.get("petitionerPartyName") or d.get("petitioner") or "",
-        "Patent #":       d.get("respondentPatentNumber") or d.get("patentNumber") or "",
-        "Institution":    d.get("institutionDecisionDate") or "",
-        "FWD Date":       d.get("finalWrittenDecisionDate") or "",
-        "Outcome":        d.get("prosecutionStatus") or d.get("status") or "",
+        "Trial #":       d.get("trialNumber", ""),
+        "Type":          tm.get("trialTypeCode", ""),
+        "Status":        tm.get("trialStatusCategory", ""),
+        "Patent Owner":  po.get("realPartyInInterestName", ""),
+        "Petitioner":    rp.get("realPartyInInterestName", ""),
+        "Patent #":      po.get("patentNumber", ""),
+        "Art Unit":      po.get("groupArtUnitNumber", ""),
+        "Filed":         tm.get("accordedFilingDate", ""),
+        "Institution":   tm.get("institutionDecisionDate", ""),
+        "FWD":           tm.get("finalWrittenDecisionDate", ""),
     }
 
 df = pd.DataFrame([_extract(d) for d in decisions])
 st.dataframe(df, use_container_width=True, height=450)
 
-# ── Decision detail + AI analysis ────────────────────────────────────────────
-if OPENAI_API_KEY and decisions:
+# ── AI decision analysis ──────────────────────────────────────────────────────
+if OPENAI_API_KEY:
     st.markdown("---")
     st.subheader("AI Decision Analysis")
-    st.caption("Select a decision and paste its text for AI analysis.")
-
-    proc_nums = [_extract(d)["Proceeding #"] for d in decisions if _extract(d)["Proceeding #"]]
-    if proc_nums:
-        selected = st.selectbox("Select a proceeding", proc_nums)
+    st.caption("Paste the full text of a PTAB decision for AI analysis and legal-issue tagging.")
 
     decision_text = st.text_area(
         "Paste full decision text here (copy from USPTO PTAB portal):",
@@ -95,6 +92,6 @@ if OPENAI_API_KEY and decisions:
         st.markdown(analysis)
 
 st.caption(
-    "Data: USPTO PTAB API (data.uspto.gov). "
+    "Data: USPTO PTAB API (api.uspto.gov). "
     "Covers AIA trial proceedings (IPR, PGR, CBM) since September 2012."
 )

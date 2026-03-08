@@ -14,22 +14,22 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from utils.auth import require_auth, sidebar_user
-from services import uspto_api, patentsview_api
+from services import uspto_api
 from services.scoring import compute_examiner_score
 
 require_auth()
 sidebar_user()
 
 st.title("🔍 Examiner Search")
-st.caption("Search by examiner name to view their difficulty profile and prosecution statistics.")
+st.caption("Search by examiner last name to view their difficulty profile and prosecution statistics.")
 
 # ── Search form ───────────────────────────────────────────────────────────────
 with st.form("examiner_form"):
     col1, col2 = st.columns([3, 1])
     with col1:
         name_input = st.text_input(
-            "Examiner name (last name, or 'Last, First')",
-            placeholder="e.g. Smith  or  Smith, John",
+            "Examiner name (last name, or 'LAST, FIRST')",
+            placeholder="e.g. SMITH  or  SMITH, JOHN",
         )
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
@@ -38,7 +38,7 @@ with st.form("examiner_form"):
 if not submitted or not name_input.strip():
     st.stop()
 
-examiner_name = name_input.strip()
+examiner_name = name_input.strip().upper()
 
 # ── Fetch data ────────────────────────────────────────────────────────────────
 with st.spinner(f"Fetching applications for examiner '{examiner_name}'…"):
@@ -47,16 +47,26 @@ with st.spinner(f"Fetching applications for examiner '{examiner_name}'…"):
 if not apps:
     st.warning(
         f"No applications found for examiner '{examiner_name}'.  "
-        "Try a last-name-only search, or check the spelling."
+        "Try a last-name-only search in uppercase (e.g. SMITH)."
     )
     st.stop()
 
 # ── Compute score ─────────────────────────────────────────────────────────────
 stats = compute_examiner_score(apps)
 
-# Infer examiner's art unit from most common value in results
-art_units = [a.get("appGroupArtUnitNumber", "") for a in apps if a.get("appGroupArtUnitNumber")]
+# Infer art unit from most common value in results (ODP field: applicationMetaData.groupArtUnitNumber)
+art_units = [
+    uspto_api.meta(a).get("groupArtUnitNumber", "")
+    for a in apps
+    if uspto_api.meta(a).get("groupArtUnitNumber")
+]
 art_unit = max(set(art_units), key=art_units.count) if art_units else "N/A"
+
+# Infer canonical examiner name from first result
+canonical_name = (
+    uspto_api.meta(apps[0]).get("examinerNameText", examiner_name)
+    if apps else examiner_name
+)
 
 # ── Score badge ───────────────────────────────────────────────────────────────
 badge_html = (
@@ -68,8 +78,8 @@ badge_html = (
 st.markdown("---")
 col_name, col_badge = st.columns([3, 2])
 with col_name:
-    st.markdown(f"### Examiner: {examiner_name}")
-    st.markdown(f"**Art Unit:** {art_unit}")
+    st.markdown(f"### Examiner: {canonical_name}")
+    st.markdown(f"**Primary Art Unit:** {art_unit}")
 with col_badge:
     st.markdown(badge_html, unsafe_allow_html=True)
 
@@ -77,12 +87,12 @@ with col_badge:
 st.markdown("---")
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Applications (sample)", stats["total"])
-m2.metric("Allowance Rate", f"{stats['allowance_rate']} %" if stats['allowance_rate'] is not None else "N/A")
-m3.metric("Avg Office Actions", stats["avg_oa"] if stats["avg_oa"] is not None else "N/A")
+m2.metric("Allowance Rate",   f"{stats['allowance_rate']} %" if stats['allowance_rate'] is not None else "N/A")
+m3.metric("Avg Office Actions", stats["avg_oa"]      if stats["avg_oa"]      is not None else "N/A")
 m4.metric("Avg Pendency (mo.)", stats["avg_pendency"] if stats["avg_pendency"] is not None else "N/A")
-m5.metric("RCE Rate", f"{stats['rce_rate']} %" if stats['rce_rate'] is not None else "N/A")
+m5.metric("RCE Rate",          f"{stats['rce_rate']} %" if stats['rce_rate'] is not None else "N/A")
 
-# ── Outcome donut chart ───────────────────────────────────────────────────────
+# ── Outcome donut + filing trend ──────────────────────────────────────────────
 st.markdown("---")
 col_donut, col_trend = st.columns(2)
 
@@ -99,12 +109,15 @@ with col_donut:
 
 with col_trend:
     st.subheader("Filing Trend (by year)")
-    df_apps = pd.DataFrame(apps)
-    if "appFilingDate" in df_apps.columns:
-        df_apps["year"] = pd.to_datetime(
-            df_apps["appFilingDate"], errors="coerce"
-        ).dt.year
-        trend = df_apps.groupby("year").size().reset_index(name="count")
+    filing_dates = [
+        uspto_api.meta(a).get("filingDate", "")
+        for a in apps
+        if uspto_api.meta(a).get("filingDate")
+    ]
+    if filing_dates:
+        df_trend = pd.DataFrame({"date": pd.to_datetime(filing_dates, errors="coerce")})
+        df_trend["year"] = df_trend["date"].dt.year
+        trend = df_trend.groupby("year").size().reset_index(name="count").dropna()
         fig_trend = px.bar(trend, x="year", y="count",
                            labels={"year": "Filing Year", "count": "Applications"},
                            color_discrete_sequence=["#3498db"])
@@ -113,40 +126,40 @@ with col_trend:
     else:
         st.info("Filing date data not available.")
 
-# ── AI summary (if key configured) ───────────────────────────────────────────
+# ── AI summary ────────────────────────────────────────────────────────────────
 from config import OPENAI_API_KEY
 if OPENAI_API_KEY:
     with st.expander("🤖 AI Examiner Brief (click to generate)"):
         if st.button("Generate AI Summary"):
             with st.spinner("Generating AI summary…"):
                 from services.openai_service import examiner_summary
-                summary = examiner_summary(examiner_name, stats)
+                summary = examiner_summary(canonical_name, stats)
             st.markdown(summary)
 
 # ── Applications table ────────────────────────────────────────────────────────
 st.markdown("---")
-st.subheader(f"Recent Applications (showing {len(apps)} of sample)")
+st.subheader(f"Applications (sample of {len(apps)})")
 
-display_cols = {
-    "patentApplicationNumber": "Application #",
-    "inventionTitle": "Title",
-    "appFilingDate": "Filing Date",
-    "appGroupArtUnitNumber": "Art Unit",
-    "applicationStatusCode": "Status Code",
-    "patentNumber": "Patent #",
-}
+rows = []
+for a in apps:
+    m = uspto_api.meta(a)
+    rows.append({
+        "App #":        a.get("applicationNumberText", ""),
+        "Title":        m.get("inventionTitle", "")[:60],
+        "Filing Date":  m.get("filingDate", ""),
+        "Art Unit":     m.get("groupArtUnitNumber", ""),
+        "Status":       m.get("applicationStatusDescriptionText", ""),
+        "Patent #":     uspto_api.get_patent_number(a),
+    })
 
-df_display = pd.DataFrame(apps)
-available = {k: v for k, v in display_cols.items() if k in df_display.columns}
-if available:
-    df_show = df_display[list(available.keys())].rename(columns=available)
-    df_show = df_show.sort_values("Filing Date", ascending=False) if "Filing Date" in df_show else df_show
-    st.dataframe(df_show, use_container_width=True, height=400)
-else:
-    st.json(apps[:5])
+df_show = pd.DataFrame(rows)
+if "Filing Date" in df_show.columns:
+    df_show["Filing Date"] = pd.to_datetime(df_show["Filing Date"], errors="coerce")
+    df_show = df_show.sort_values("Filing Date", ascending=False)
+st.dataframe(df_show, use_container_width=True, height=400)
 
 st.caption(
-    "Data source: USPTO Patent Examination Data System (PEDS). "
-    "Sample limited to 200 most-recent applications. "
-    "Score is computed from this sample and may differ from PatentAdvisor ETA™."
+    "Data: USPTO Open Data Portal (api.uspto.gov). "
+    f"Sample limited to {len(apps)} most-recent applications. "
+    "Score computed from this sample."
 )

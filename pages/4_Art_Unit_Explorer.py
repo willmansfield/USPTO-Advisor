@@ -57,7 +57,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Total Apps (sample)", au_stats["total"])
-m2.metric("Allowance Rate", f"{au_stats['allowance_rate']} %" if au_stats["allowance_rate"] is not None else "N/A")
+m2.metric("Allowance Rate",    f"{au_stats['allowance_rate']} %" if au_stats["allowance_rate"] is not None else "N/A")
 m3.metric("Avg Office Actions", au_stats["avg_oa"])
 m4.metric("Avg Pendency (mo.)", au_stats["avg_pendency"])
 
@@ -67,7 +67,7 @@ st.subheader("Examiner Roster – Difficulty Breakdown")
 
 examiner_apps: dict[str, list] = defaultdict(list)
 for app in apps:
-    ex = app.get("appExamNameText", "Unknown")
+    ex = uspto_api.meta(app).get("examinerNameText", "Unknown")
     examiner_apps[ex].append(app)
 
 rows = []
@@ -81,21 +81,19 @@ for ex_name, ex_apps in examiner_apps.items():
         "Allowance Rate": s["allowance_rate"],
         "Score":          s["score"],
         "Band":           s["band"],
-        "_color":         s["color_hex"],
     })
 
-df_ex = pd.DataFrame(rows).sort_values("Score", ascending=False)
+df_ex = pd.DataFrame(rows).sort_values("Score", ascending=False, na_position="last")
 
-# Colour-coded bar chart of examiner scores
 if not df_ex.empty and df_ex["Score"].notna().any():
     fig_scores = px.bar(
         df_ex.dropna(subset=["Score"]),
         x="Examiner", y="Score",
         color="Band",
         color_discrete_map={
-            "Easy (Green)":     "#2ecc71",
+            "Easy (Green)":      "#2ecc71",
             "Moderate (Yellow)": "#f39c12",
-            "Difficult (Red)":  "#e74c3c",
+            "Difficult (Red)":   "#e74c3c",
         },
         labels={"Score": "Difficulty Score (0–100)"},
         title="Examiner Scores within Art Unit",
@@ -106,7 +104,7 @@ if not df_ex.empty and df_ex["Score"].notna().any():
     )
     st.plotly_chart(fig_scores, use_container_width=True)
 
-# ── Score composition pie (art unit level) ───────────────────────────────────
+# ── Score composition pie ─────────────────────────────────────────────────────
 band_counts = df_ex["Band"].value_counts().reset_index()
 band_counts.columns = ["Band", "Count"]
 
@@ -114,9 +112,9 @@ col_pie, col_tbl = st.columns(2)
 with col_pie:
     st.subheader("Score Distribution")
     color_map = {
-        "Easy (Green)":     "#2ecc71",
+        "Easy (Green)":      "#2ecc71",
         "Moderate (Yellow)": "#f39c12",
-        "Difficult (Red)":  "#e74c3c",
+        "Difficult (Red)":   "#e74c3c",
     }
     fig_band = go.Figure(go.Pie(
         labels=band_counts["Band"],
@@ -129,11 +127,9 @@ with col_pie:
 
 with col_tbl:
     st.subheader("Examiner Table")
-    display_cols = ["Examiner", "Apps", "Allowance Rate", "Score", "Band"]
     st.dataframe(
-        df_ex[display_cols].reset_index(drop=True),
-        use_container_width=True,
-        height=280,
+        df_ex[["Examiner", "Apps", "Allowance Rate", "Score", "Band"]].reset_index(drop=True),
+        use_container_width=True, height=280,
     )
 
-st.caption(f"Data: USPTO PEDS – sample up to 200 most-recent applications in art unit {art_unit}.")
+st.caption(f"Data: USPTO Open Data Portal – sample up to 200 most-recent applications in art unit {art_unit}.")
