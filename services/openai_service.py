@@ -30,14 +30,17 @@ def _chat(system: str, user: str) -> str:
     client = _client()
     if not client:
         return ""
-    resp = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user",   "content": user},
-        ],
-    )
-    return resp.choices[0].message.content.strip()
+    try:
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user},
+            ],
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return f"⚠️ AI request failed: {e}"
 
 
 # ── USPTO tool definitions for function calling ─────────────────────────────────────────────
@@ -300,7 +303,7 @@ def analyze_office_action(oa_text: str) -> str:
         "and (4) the main weaknesses in the examiner's position. "
         "Use clear headings and bullet points."
     )
-    return _chat(sys_prompt, oa_text[:8000])
+    return _chat(sys_prompt, oa_text[:15000])
 
 
 def response_strategy(oa_text: str, claims: str) -> str:
@@ -315,7 +318,7 @@ def response_strategy(oa_text: str, claims: str) -> str:
         "(4) any interview strategies with the examiner. "
         "Be specific and cite claim elements and cited references by name."
     )
-    user_prompt = "OFFICE ACTION:\n" + oa_text[:5000] + "\n\nCURRENT CLAIMS:\n" + claims[:3000]
+    user_prompt = "OFFICE ACTION:\n" + oa_text[:12000] + "\n\nCURRENT CLAIMS:\n" + claims[:6000]
     return _chat(sys_prompt, user_prompt)
 
 
@@ -358,9 +361,10 @@ def portfolio_summary(entity: str, stats: dict, app_sample: list[dict]) -> str:
         "Cover: overall prosecution success, examiner difficulty patterns, "
         "technology centre distribution, and 3 specific strategic recommendations."
     )
+    from services.uspto_api import meta as _meta
     top_examiners: dict = {}
     for a in app_sample:
-        ex = a.get("appExamNameText", "Unknown")
+        ex = _meta(a).get("examinerNameText", "Unknown")
         top_examiners[ex] = top_examiners.get(ex, 0) + 1
     top5 = sorted(top_examiners.items(), key=lambda x: x[1], reverse=True)[:5]
     user_prompt = (

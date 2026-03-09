@@ -7,6 +7,7 @@ inline, AI-narrated prosecution summary, and instant OA analysis.
 
 import streamlit as st
 from utils.auth import require_auth, sidebar_user
+from utils.ui import score_badge
 from services import uspto_api, openai_service
 from services.scoring import compute_examiner_score
 from services.uspto_api import (
@@ -33,13 +34,6 @@ _EVENT_COLORS = {
 
 def _event_icon(code: str) -> str:
     return _EVENT_COLORS.get(code, ("#95a5a6", "⚪"))[1]
-
-def _score_badge(score, band, color):
-    return (
-        f'<span style="background:{color};color:white;padding:4px 14px;'
-        f'border-radius:20px;font-weight:700;font-size:1rem;">'
-        f'{band} &nbsp; {score}/100</span>'
-    )
 
 # ── Search ────────────────────────────────────────────────────────────────────
 
@@ -109,7 +103,7 @@ if examiner_name:
         st.markdown("#### 👤 Examiner")
         if examiner_stats:
             st.markdown(
-                _score_badge(examiner_stats["score"], examiner_stats["band"], examiner_stats["color_hex"]),
+                score_badge(examiner_stats["score"], examiner_stats["band"], examiner_stats["color_hex"], size="small"),
                 unsafe_allow_html=True,
             )
             st.markdown("")  # spacer
@@ -199,7 +193,11 @@ with tab_ai:
             cache_key_oa = f"oa_analysis_{app_num}_{latest_oa.get('documentIdentifier', '')}"
             if cache_key_oa not in st.session_state:
                 with st.spinner("Fetching and analysing the office action…"):
-                    oa_text = uspto_api.fetch_oa_text(app_num, latest_oa.get("documentIdentifier",""))
+                    try:
+                        oa_text = uspto_api.fetch_oa_text(app_num, latest_oa.get("documentIdentifier", ""))
+                    except Exception as e:
+                        oa_text = ""
+                        st.warning(f"Could not fetch office action document: {e}")
                     if oa_text:
                         analysis = openai_service.analyze_office_action(oa_text)
                         st.session_state[cache_key_oa] = (oa_text, analysis)
@@ -307,8 +305,10 @@ with tab_docs:
                 if has_xml and doc_id:
                     with st.expander("View text"):
                         with st.spinner("Extracting…"):
-                            text = uspto_api.fetch_document_text(app_num, doc_id)
+                            try:
+                                text = uspto_api.fetch_document_text(app_num, doc_id)
+                            except Exception as e:
+                                text = ""
+                                st.warning(f"Could not fetch document: {e}")
                         if text:
                             st.text_area("", value=text, height=300, key=f"doc_{doc_id}")
-                        else:
-                            st.warning("Could not extract text.")

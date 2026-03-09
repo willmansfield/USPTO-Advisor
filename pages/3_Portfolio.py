@@ -11,6 +11,7 @@ import plotly.express as px
 from collections import Counter
 
 from utils.auth import require_auth, sidebar_user
+from utils.ui import score_badge
 from services import uspto_api, openai_service
 from services.scoring import compute_examiner_score
 from services.uspto_api import meta, get_outcome, get_patent_number, get_assignee
@@ -21,13 +22,6 @@ sidebar_user()
 st.title("💼 Portfolio")
 st.caption("Prosecution health dashboard for any company or assignee — powered by live USPTO data.")
 
-
-def _score_badge(score, band, color):
-    return (
-        f'<span style="background:{color};color:white;padding:4px 14px;'
-        f'border-radius:20px;font-weight:700;font-size:1rem;">'
-        f'{band} &nbsp; {score}/100</span>'
-    )
 
 
 # ── Search ────────────────────────────────────────────────────────────────────
@@ -65,8 +59,15 @@ stats = compute_examiner_score(apps)
 
 st.markdown(f"## {company}")
 st.caption(f"Analysis based on {len(apps)} most recent applications")
-st.markdown(_score_badge(stats["score"], stats["band"], stats["color_hex"]),
-            unsafe_allow_html=True)
+st.markdown(
+    score_badge(
+        stats["score"],
+        f"Examiner Difficulty: {stats['band']}",
+        stats["color_hex"],
+        size="small",
+    ),
+    unsafe_allow_html=True,
+)
 st.markdown("<br>", unsafe_allow_html=True)
 
 # Headline metrics
@@ -81,6 +82,7 @@ st.markdown("---")
 
 # ── AI Executive Summary (always) ─────────────────────────────────────────────
 
+portfolio_summary_text = ""
 if openai_service._check():
     st.markdown("### 🤖 AI Executive Summary")
     cache_key = f"portfolio_summary_{company}"
@@ -88,7 +90,26 @@ if openai_service._check():
         with st.spinner("Generating AI executive summary…"):
             report = openai_service.portfolio_summary(company, stats, apps[:50])
             st.session_state[cache_key] = report
-    st.markdown(st.session_state[cache_key])
+    portfolio_summary_text = st.session_state[cache_key]
+    st.markdown(portfolio_summary_text)
+
+    export_md = "\n".join([
+        f"# Portfolio Analysis: {company}",
+        f"Sample: {stats['total']} applications | "
+        f"Patented: {stats['patented']} | Abandoned: {stats['abandoned']} | Pending: {stats['pending']}",
+        f"Allowance Rate: {stats['allowance_rate']}% | "
+        f"Avg Pendency: {stats['avg_pendency']} mo | "
+        f"Avg OAs: {stats['avg_oa']}",
+        "",
+        "## AI Executive Summary",
+        portfolio_summary_text,
+    ])
+    st.download_button(
+        "⬇️ Export Portfolio Summary",
+        data=export_md,
+        file_name=f"portfolio_{company.replace(' ', '_')[:40]}.md",
+        mime="text/markdown",
+    )
     st.markdown("---")
 else:
     st.info("Add **OPENAI_API_KEY** to `.env` to enable AI executive summaries.")
