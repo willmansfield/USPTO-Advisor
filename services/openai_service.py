@@ -8,7 +8,6 @@ Every public function returns a string; callers should handle empty config grace
 from __future__ import annotations
 
 import json
-import streamlit as st
 from config import OPENAI_API_KEY, OPENAI_MODEL
 
 
@@ -24,13 +23,7 @@ def _client():
 
 
 def _check() -> bool:
-    if not OPENAI_API_KEY:
-        st.warning(
-            "OpenAI API key is not configured. "
-            "Set OPENAI_API_KEY in your .env file and restart."
-        )
-        return False
-    return True
+    return bool(OPENAI_API_KEY)
 
 
 def _chat(system: str, user: str) -> str:

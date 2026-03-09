@@ -20,10 +20,11 @@ Key ODP response schema (patentFileWrapperDataBag[]):
 
 from __future__ import annotations
 
+import functools
+import logging
 import time
 import urllib3
 import requests
-import streamlit as st
 
 from config import (
     USPTO_API_KEY, PAGE_LIMIT, MAX_PAGES,
@@ -31,6 +32,15 @@ from config import (
 )
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+def _cache(fn):
+    """Use st.cache_data when running inside Streamlit, else plain lru_cache."""
+    try:
+        import streamlit as st
+        return st.cache_data(ttl=3600, show_spinner=False)(fn)
+    except Exception:
+        return functools.lru_cache(maxsize=256)(fn)
 
 _BASE      = "https://api.uspto.gov/api/v1/patent"
 _PTAB_URL  = f"{_BASE}/trials/decisions/search"
@@ -67,11 +77,11 @@ def _safe_query(q: str, limit: int = PAGE_LIMIT, offset: int = 0) -> dict:
     except requests.HTTPError as e:
         if e.response.status_code == 404:
             return {}  # No results found � not a real error
-        st.error(f"USPTO API {e.response.status_code}: {e.response.text[:300]}")
+        logging.warning("USPTO API %s: %s", e.response.status_code, e.response.text[:300])
     except requests.ConnectionError:
-        st.error("Cannot reach USPTO API. Check network connection.")
+        logging.warning("Cannot reach USPTO API.")
     except Exception as e:
-        st.error(f"USPTO API error: {e}")
+        logging.warning("USPTO API error: %s", e)
     return {}
 
 
@@ -161,7 +171,7 @@ def pendency_months(app: dict) -> float | None:
 
 # ── Public search functions ───────────────────────────────────────────────────
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@_cache
 def search_by_examiner(name: str) -> list[dict]:
     """Fetch applications for an examiner by last name (or 'LAST, FIRST')."""
     last = name.split(",")[0].strip()
@@ -175,12 +185,12 @@ def search_by_examiner(name: str) -> list[dict]:
     return []
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@_cache
 def search_by_art_unit(art_unit: str) -> list[dict]:
     return _fetch_all(f"applicationMetaData.groupArtUnitNumber:{art_unit.strip()}")
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@_cache
 def search_by_assignee(assignee: str) -> list[dict]:
     for q in [
         f'applicationMetaData.firstApplicantName:"{assignee}"',
@@ -193,7 +203,7 @@ def search_by_assignee(assignee: str) -> list[dict]:
     return []
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@_cache
 def get_application(app_num: str) -> dict:
     clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
     data  = _safe_query(f"applicationNumberText:{clean}", limit=1)
@@ -201,13 +211,13 @@ def get_application(app_num: str) -> dict:
     return docs[0] if docs else {}
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@_cache
 def get_transactions(app_num: str) -> list[dict]:
     app = get_application(app_num)
     return app.get("eventDataBag", [])
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@_cache
 def search_applications(
     app_num:   str = "",
     assignee:  str = "",
@@ -238,7 +248,7 @@ def search_applications(
 
 # ── PTAB decisions ────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@_cache
 def search_ptab(
     patent_owner: str = "",
     petitioner:   str = "",
@@ -257,11 +267,11 @@ def search_ptab(
         if r.status_code == 200:
             return r.json().get("patentTrialDocumentDataBag", [])
     except Exception as e:
-        st.error(f"PTAB API error: {e}")
+        logging.warning("PTAB API error: %s", e)
     return []
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@_cache
 def get_oa_documents(app_num: str) -> list[dict]:
     """Return IFW Office Action documents for an application (with XML archive URLs)."""
     OA_CODES = {"CTNF", "CTFR", "MCTNF", "MCTFR"}
@@ -367,7 +377,7 @@ def fetch_claims_text(app_num: str) -> str:
     newline = chr(10)
     return (newline + newline).join(claims)
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@_cache
 def get_all_documents(app_num: str) -> list[dict]:
     """Return ALL IFW documents for an application (unfiltered)."""
     clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
@@ -382,17 +392,6 @@ def get_all_documents(app_num: str) -> list[dict]:
 def fetch_document_text(app_num: str, doc_identifier: str) -> str:
     """Generic document text extractor - works for any XML-archive document."""
     return fetch_oa_text(app_num, doc_identifier)
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_all_documents(app_num: str) -> list[dict]:
-    """Return ALL IFW documents for an application (unfiltered)."""
-    clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
-    url = f"{_BASE}/applications/{clean}/documents"
-    try:
-        data = _get(url)
-    except Exception:
-        return []
-    return data.get("documentBag", [])
 
 
 def fetch_document_text(app_num: str, doc_identifier: str) -> str:

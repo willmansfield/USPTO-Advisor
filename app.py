@@ -1,7 +1,7 @@
 """
-PatentAdvisor POC – Home / Login page.
-
+PatentAdvisor — home / login page.
 Run with:  streamlit run app.py
+API server: uvicorn api.main:app --port 8000
 """
 
 import streamlit as st
@@ -80,44 +80,65 @@ def show_home():
     from utils.auth import sidebar_user
     sidebar_user()
 
-    st.title(f"⚖️ {APP_TITLE}")
-    st.markdown(
-        f"Welcome, **{st.session_state.get('name', '')}**.  "
-        "Use the sidebar to navigate."
-    )
-
+    st.title("⚖️ PatentAdvisor")
+    st.markdown(f"Welcome, **{st.session_state.get('name', '')}**.")
     st.markdown("---")
-    st.subheader("What can you do here?")
 
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown("### 📊 Patent Analytics (PA Mode)")
-        st.markdown("""
-| Page | Description |
-|------|-------------|
-| 🔍 Examiner Search | Profile, difficulty score (Green/Yellow/Red), allowance rate, OA stats |
-| 📋 Application Search | Multi-field search – assignee, art unit, status, dates |
-| 💼 Portfolio View | Company or law-firm prosecution health dashboard |
-| 🏛️ Art Unit Explorer | Art unit stats, examiner roster, score distribution |
-| ⚖️ PTAB Decisions | Search PTAB trial outcomes |
-        """)
+        st.markdown("### Start here")
+
+        if st.button(
+            "⚖️ **Prosecution Hub**\n\nLook up any application — full prosecution history, "
+            "inline examiner profile, AI-powered OA analysis and response strategy.",
+            use_container_width=True,
+        ):
+            st.switch_page("pages/1_Prosecution_Hub.py")
+
+        st.markdown("")
+
+        if st.button(
+            "🔬 **Examiner Intel**\n\nSearch an examiner or art unit — "
+            "difficulty score, allowance rate, AI prosecution brief, examiner roster.",
+            use_container_width=True,
+        ):
+            st.switch_page("pages/2_Examiner_Intel.py")
+
+        st.markdown("")
+
+        if st.button(
+            "💼 **Portfolio**\n\nCompany prosecution health dashboard — "
+            "outcomes, trends, top examiners, art units, AI executive summary.",
+            use_container_width=True,
+        ):
+            st.switch_page("pages/3_Portfolio.py")
 
     with col2:
-        st.markdown("### 🤖 AI Assistant Mode")
-        st.markdown("""
-| Page | Description |
-|------|-------------|
-| 💬 AI Chat | Conversational patent assistant with live USPTO context |
-| 📄 OA Analyzer | Paste an Office Action → plain-English analysis + response strategy |
-| ✅ Claim Checker | Pre-filing claim weakness analysis (§102/103/112) |
-        """)
+        st.markdown("### Research & analysis")
+
+        if st.button(
+            "⚖️ **PTAB & Pre-filing**\n\nSearch IPR/PGR/CBM decisions · "
+            "Pre-filing claim checker for §102/103/112 risks.",
+            use_container_width=True,
+        ):
+            st.switch_page("pages/4_PTAB_Claims.py")
+
+        st.markdown("")
+
+        if st.button(
+            "💬 **AI Patent Assistant**\n\nConversational patent AI — ask about examiners, "
+            "art units, strategy, claim drafting. Fetches live USPTO data automatically.",
+            use_container_width=True,
+        ):
+            st.switch_page("pages/5_AI_Chat.py")
 
     st.markdown("---")
     st.info(
-        "**Data source:** USPTO Patent Examination Data System (PEDS) & PatentsView – "
-        "live API calls, no local database.  "
-        "Results reflect a sample of up to 200 recent applications per query."
+        "**Data:** USPTO Open Data Portal — live API calls, no local database. "
+        "Samples up to 200 most recent applications per query.  \n"
+        "**REST API + MCP server:** `uvicorn api.main:app --port 8000` — "
+        "docs at `/docs`, MCP at `/mcp`."
     )
 
 
