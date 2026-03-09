@@ -419,10 +419,16 @@ def general_chat(messages: list[dict], use_tools: bool = True) -> tuple[str, lis
         api_messages.append(msg)
         for tc in msg.tool_calls:
             name = tc.function.name
-            args = json.loads(tc.function.arguments)
+            try:
+                args = json.loads(tc.function.arguments)
+            except json.JSONDecodeError:
+                args = {}
             summary = name + "(" + ", ".join(k + "=" + repr(v) for k, v in args.items()) + ")"
             tool_calls_made.append(summary)
-            result = _dispatch_tool(name, args)
+            try:
+                result = _dispatch_tool(name, args)
+            except Exception as e:
+                result = f"Tool {name} failed: {e}"
             api_messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -430,5 +436,8 @@ def general_chat(messages: list[dict], use_tools: bool = True) -> tuple[str, lis
             })
 
     # Fallback if loop limit reached
-    resp = client.chat.completions.create(model=OPENAI_MODEL, messages=api_messages)
-    return (resp.choices[0].message.content or "").strip(), tool_calls_made
+    try:
+        resp = client.chat.completions.create(model=OPENAI_MODEL, messages=api_messages)
+        return (resp.choices[0].message.content or "").strip(), tool_calls_made
+    except Exception as e:
+        return f"⚠️ AI request failed: {e}", tool_calls_made

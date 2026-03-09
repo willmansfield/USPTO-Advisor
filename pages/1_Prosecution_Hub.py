@@ -213,7 +213,10 @@ with tab_ai:
                 cache_key_strat = f"strategy_{app_num}_{latest_oa.get('documentIdentifier', '')}"
                 if cache_key_strat not in st.session_state:
                     with st.spinner("Fetching claims and generating response strategy…"):
-                        claims_text = uspto_api.fetch_claims_text(app_num)
+                        try:
+                            claims_text = uspto_api.fetch_claims_text(app_num)
+                        except Exception:
+                            claims_text = ""
                         if claims_text:
                             strategy = openai_service.response_strategy(oa_text, claims_text)
                         else:

@@ -160,10 +160,8 @@ with col3:
         fig_ex.update_layout(margin=dict(t=0, b=0), height=340,
                              yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig_ex, use_container_width=True)
-    # Click to go to examiner page
     if st.button("🔍 Explore an examiner's full profile →"):
-        st.info("Click any row in the Applications table below to open in Prosecution Hub, "
-                "or use the Examiner Intel page.")
+        st.switch_page("pages/2_Examiner_Intel.py")
 
 with col4:
     st.markdown("#### Art Unit Distribution")

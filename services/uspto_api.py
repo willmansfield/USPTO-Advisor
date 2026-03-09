@@ -442,6 +442,7 @@ def get_all_documents(app_num: str) -> list[dict]:
     return data.get("documentBag", [])
 
 
+@_cache
 def fetch_document_text(app_num: str, doc_identifier: str) -> str:
     """Generic document text extractor - works for any XML-archive document."""
     return fetch_oa_text(app_num, doc_identifier)
