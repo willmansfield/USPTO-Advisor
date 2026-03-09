@@ -390,7 +390,7 @@ def general_chat(messages: list[dict], use_tools: bool = True) -> tuple[str, lis
         return "", []
 
     system = (
-        "You are PatentAdvisor AI, an expert patent prosecution assistant. "
+        "You are USPTO Advisor AI, an expert patent prosecution assistant. "
         "You help patent attorneys, agents, and inventors understand USPTO examination, "
         "prior art, claim strategy, and prosecution statistics. "
         "You have access to live USPTO data via the provided tools. "

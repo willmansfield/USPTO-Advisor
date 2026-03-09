@@ -32,7 +32,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL   = "gpt-5-mini"
 
 # ── App settings ──────────────────────────────────────────────────────────────
-APP_TITLE   = "PatentAdvisor POC"
+APP_TITLE   = "USPTO Advisor"
 PAGE_LIMIT  = 50   # records per PEDS page
 MAX_PAGES   = 10   # max pages to fetch for examiner stats (= 500 apps)
 

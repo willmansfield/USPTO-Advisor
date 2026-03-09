@@ -1,6 +1,6 @@
-# PatentAdvisor POC
+# USPTO Advisor
 
-A Python/Streamlit proof-of-concept that reproduces the core features of [LexisNexis PatentAdvisor®](https://www.lexisnexisip.com/solutions/patent-prosecution/patentadvisor/) using only free, live calls to the USPTO Open Data Portal API, augmented with an optional OpenAI layer for AI-powered analysis.
+A Python/Streamlit tool for live USPTO patent analytics and AI-powered prosecution analysis, using only free, open calls to the USPTO Open Data Portal API augmented with an optional OpenAI layer.
 
 The app also exposes a **FastAPI REST backend** and an **MCP server** — give the MCP endpoint to any AI assistant (Claude Desktop, Cursor, etc.) for live patent research during conversations.
 
@@ -100,7 +100,7 @@ The MCP server runs at `/mcp/sse` (SSE transport) when the API is running, or as
   "mcpServers": {
     "patent-advisor": {
       "command": "python",
-      "args": ["/absolute/path/to/PatentAdvisor/api/mcp_server.py"],
+      "args": ["/absolute/path/to/uspto-advisor/api/mcp_server.py"],
       "env": {
         "USPTO_API_KEY": "your-key",
         "OPENAI_API_KEY": "sk-..."
@@ -168,7 +168,7 @@ utils/
 
 ## Examiner Scoring
 
-Composite 0–100 score (analogous to PatentAdvisor ETA™, computed from open data):
+Composite 0–100 score (an independent scoring model, computed from open data):
 
 | Component | Weight | Direction |
 |-----------|--------|-----------|

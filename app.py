@@ -1,5 +1,5 @@
 """
-PatentAdvisor — home / login page.
+USPTO Advisor — home / login page.
 Run with:  streamlit run app.py
 API server: uvicorn api.main:app --port 8000
 """
@@ -80,7 +80,7 @@ def show_home():
     from utils.auth import sidebar_user
     sidebar_user()
 
-    st.title("⚖️ PatentAdvisor")
+    st.title("⚖️ USPTO Advisor")
     st.markdown(f"Welcome, **{st.session_state.get('name', '')}**.")
     st.markdown("---")
 

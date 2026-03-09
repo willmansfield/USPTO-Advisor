@@ -1,5 +1,5 @@
 """
-PatentAdvisor FastAPI backend.
+USPTO Advisor FastAPI backend.
 
 Start with:  uvicorn api.main:app --reload --port 8000
 
@@ -28,7 +28,7 @@ from services.uspto_api import (
 )
 
 app = FastAPI(
-    title="PatentAdvisor API",
+    title="USPTO Advisor API",
     version="1.0.0",
     description=(
         "Live USPTO patent data and AI analysis. "

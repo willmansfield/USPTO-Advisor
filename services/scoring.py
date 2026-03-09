@@ -2,7 +2,7 @@
 Examiner and art-unit scoring logic.
 
 Produces a composite 0–100 score and Green / Yellow / Red difficulty band,
-analogous to PatentAdvisor ETA™ but computed from open USPTO data.
+an independent scoring model but computed from open USPTO data.
 
 Weights (tunable in config.py):
   40 % – allowance rate  (higher = easier)

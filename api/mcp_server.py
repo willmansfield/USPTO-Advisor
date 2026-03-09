@@ -1,5 +1,5 @@
 """
-PatentAdvisor MCP Server.
+USPTO Advisor MCP Server.
 
 Exposes USPTO patent data and AI analysis as MCP tools — give this to
 any MCP-compatible AI assistant (Claude Desktop, Cursor, etc.) for live
@@ -20,7 +20,7 @@ patent research during conversations.
       "mcpServers": {
         "patent-advisor": {
           "command": "python",
-          "args": ["/absolute/path/to/PatentAdvisor/api/mcp_server.py"],
+          "args": ["/absolute/path/to/uspto-advisor/api/mcp_server.py"],
           "env": { "USPTO_API_KEY": "your-key", "OPENAI_API_KEY": "sk-..." }
         }
       }
@@ -44,7 +44,7 @@ from services.uspto_api import (
 )
 
 mcp = FastMCP(
-    "PatentAdvisor",
+    "USPTO Advisor",
     instructions=(
         "You have access to live USPTO patent data and AI patent analysis tools. "
         "Use search_examiner to look up examiner difficulty profiles. "
