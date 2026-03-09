@@ -126,15 +126,6 @@ with col_trend:
     else:
         st.info("Filing date data not available.")
 
-# ── AI summary ────────────────────────────────────────────────────────────────
-from config import OPENAI_API_KEY
-if OPENAI_API_KEY:
-    with st.expander("🤖 AI Examiner Brief (click to generate)"):
-        if st.button("Generate AI Summary"):
-            with st.spinner("Generating AI summary…"):
-                from services.openai_service import examiner_summary
-                summary = examiner_summary(canonical_name, stats)
-            st.markdown(summary)
 
 # ── Applications table ────────────────────────────────────────────────────────
 st.markdown("---")
@@ -156,7 +147,22 @@ df_show = pd.DataFrame(rows)
 if "Filing Date" in df_show.columns:
     df_show["Filing Date"] = pd.to_datetime(df_show["Filing Date"], errors="coerce")
     df_show = df_show.sort_values("Filing Date", ascending=False)
-st.dataframe(df_show, use_container_width=True, height=400)
+df_show = df_show.reset_index(drop=True)
+selection = st.dataframe(
+    df_show,
+    use_container_width=True,
+    height=400,
+    on_select="rerun",
+    selection_mode="single-row",
+)
+
+# -- Row click -> navigate to Application Detail
+selected_rows = selection.selection.rows
+if selected_rows:
+    sel_app_num = str(df_show.iloc[selected_rows[0]]["App #"])
+    st.session_state.detail_app_num = sel_app_num
+    st.switch_page("pages/9_Application_Detail.py")
+
 
 st.caption(
     "Data: USPTO Open Data Portal (api.uspto.gov). "

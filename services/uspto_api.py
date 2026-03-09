@@ -65,6 +65,8 @@ def _safe_query(q: str, limit: int = PAGE_LIMIT, offset: int = 0) -> dict:
     try:
         return _apps_query(q, limit, offset)
     except requests.HTTPError as e:
+        if e.response.status_code == 404:
+            return {}  # No results found � not a real error
         st.error(f"USPTO API {e.response.status_code}: {e.response.text[:300]}")
     except requests.ConnectionError:
         st.error("Cannot reach USPTO API. Check network connection.")
@@ -257,3 +259,142 @@ def search_ptab(
     except Exception as e:
         st.error(f"PTAB API error: {e}")
     return []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_oa_documents(app_num: str) -> list[dict]:
+    """Return IFW Office Action documents for an application (with XML archive URLs)."""
+    OA_CODES = {"CTNF", "CTFR", "MCTNF", "MCTFR"}
+    clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
+    url = f"{_BASE}/applications/{clean}/documents"
+    try:
+        data = _get(url)
+    except Exception:
+        return []
+    return [doc for doc in data.get("documentBag", []) if doc.get("documentCode") in OA_CODES]
+
+
+def fetch_oa_text(app_num: str, doc_identifier: str) -> str:
+    """Download the XML archive for an OA document and return extracted plain text."""
+    import io
+    import re as _re
+    import tarfile
+    import xml.etree.ElementTree as ET
+
+    clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
+    url = f"https://api.uspto.gov/api/v1/download/applications/{clean}/{doc_identifier}/xmlarchive"
+    p, h = _auth()
+    r = requests.get(url, params=p, headers=h, timeout=30, verify=False)
+    r.raise_for_status()
+
+    tf = tarfile.open(fileobj=io.BytesIO(r.content))
+    xml_str = tf.extractfile(tf.getmembers()[0]).read().decode("utf-8", errors="replace")
+
+    # Strip processing instructions that ElementTree cannot handle mid-document
+    xml_str = _re.sub("<[?][^?]+[?]>", "", xml_str)
+
+    root = ET.fromstring(xml_str)
+    USCOM = "urn:us:gov:doc:uspto:common"
+    paragraphs = [
+        "".join(el.itertext()).strip()
+        for el in root.iter("{" + USCOM + "}P")
+    ]
+    newline = chr(10)
+    return (newline + newline).join(t for t in paragraphs if t)
+
+
+
+def _text_no_del(el):
+    """Collect all text from el, skipping com:Del subtrees (for amended claims)."""
+    COM_DEL = "{http://www.wipo.int/standards/XMLSchema/ST96/Common}Del"
+    buf = []
+    if el.text:
+        buf.append(el.text)
+    for child in el:
+        if child.tag != COM_DEL:
+            buf.append(_text_no_del(child))
+        if child.tail:
+            buf.append(child.tail)
+    return "".join(buf)
+
+
+def fetch_claims_text(app_num: str) -> str:
+    """Fetch the most recent claims document and return numbered claim text."""
+    import io
+    import re as _re
+    import tarfile
+    import xml.etree.ElementTree as ET
+
+    clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
+    url = f"{_BASE}/applications/{clean}/documents"
+    try:
+        data = _get(url)
+    except Exception:
+        return ""
+
+    clm_docs = [d for d in data.get("documentBag", []) if d.get("documentCode") == "CLM"]
+    if not clm_docs:
+        return ""
+
+    clm_docs.sort(key=lambda d: d.get("officialDate", ""), reverse=True)
+    doc_id = clm_docs[0]["documentIdentifier"]
+
+    dl_url = f"https://api.uspto.gov/api/v1/download/applications/{clean}/{doc_id}/xmlarchive"
+    p, h = _auth()
+    r = requests.get(dl_url, params=p, headers=h, timeout=30, verify=False)
+    r.raise_for_status()
+
+    tf = tarfile.open(fileobj=io.BytesIO(r.content))
+    xml_str = tf.extractfile(tf.getmembers()[0]).read().decode("utf-8", errors="replace")
+    xml_str = _re.sub("<[?][^?]+[?]>", "", xml_str)
+
+    root = ET.fromstring(xml_str)
+    USPAT = "urn:us:gov:doc:uspto:patent"
+    PAT = "http://www.wipo.int/standards/XMLSchema/ST96/Patent"
+
+    claims = []
+    for claim_el in root.iter("{" + USPAT + "}Claim"):
+        num_el = claim_el.find("{" + PAT + "}ClaimNumber")
+        num = num_el.text.strip() if num_el is not None and num_el.text else "?"
+        parts = []
+        for text_el in claim_el.iter("{" + USPAT + "}ClaimText"):
+            t = _text_no_del(text_el).strip()
+            if t:
+                parts.append(t)
+        if parts:
+            claims.append(" ".join(parts))
+
+    newline = chr(10)
+    return (newline + newline).join(claims)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_all_documents(app_num: str) -> list[dict]:
+    """Return ALL IFW documents for an application (unfiltered)."""
+    clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
+    url = f"{_BASE}/applications/{clean}/documents"
+    try:
+        data = _get(url)
+    except Exception:
+        return []
+    return data.get("documentBag", [])
+
+
+def fetch_document_text(app_num: str, doc_identifier: str) -> str:
+    """Generic document text extractor - works for any XML-archive document."""
+    return fetch_oa_text(app_num, doc_identifier)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_all_documents(app_num: str) -> list[dict]:
+    """Return ALL IFW documents for an application (unfiltered)."""
+    clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
+    url = f"{_BASE}/applications/{clean}/documents"
+    try:
+        data = _get(url)
+    except Exception:
+        return []
+    return data.get("documentBag", [])
+
+
+def fetch_document_text(app_num: str, doc_identifier: str) -> str:
+    """Generic document text extractor - works for any XML-archive document."""
+    return fetch_oa_text(app_num, doc_identifier)

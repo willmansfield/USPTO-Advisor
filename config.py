@@ -29,12 +29,12 @@ OA_TEXT_URL = "https://efts.uspto.gov/LATEST/search-index"
 
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL   = "gpt-4o"
+OPENAI_MODEL   = "gpt-5-mini"
 
 # ── App settings ──────────────────────────────────────────────────────────────
 APP_TITLE   = "PatentAdvisor POC"
-PAGE_LIMIT  = 20   # records per PEDS page
-MAX_PAGES   = 10   # max pages to fetch for examiner stats (= 200 apps)
+PAGE_LIMIT  = 50   # records per PEDS page
+MAX_PAGES   = 10   # max pages to fetch for examiner stats (= 500 apps)
 
 # Examiner difficulty thresholds (based on allowance rate %)
 SCORE_GREEN  = 60   # >= 60 % → Easy

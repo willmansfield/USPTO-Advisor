@@ -79,47 +79,19 @@ if "Filing Date" in df.columns:
     df["Filing Date"] = pd.to_datetime(df["Filing Date"], errors="coerce")
     df = df.sort_values("Filing Date", ascending=False)
 
-st.dataframe(df, use_container_width=True, height=500)
-
-# ── Prosecution history detail ────────────────────────────────────────────────
-st.markdown("---")
-st.subheader("View Full Prosecution History")
-sel_num = st.text_input(
-    "Enter an application number from the results above:",
-    placeholder="16123456",
+selection = st.dataframe(
+    df,
+    use_container_width=True,
+    height=500,
+    on_select="rerun",
+    selection_mode="single-row",
 )
-if sel_num:
-    with st.spinner("Loading prosecution history…"):
-        app_detail  = uspto_api.get_application(sel_num)
-        transactions = uspto_api.get_transactions(sel_num)
 
-    if app_detail:
-        m = uspto_api.meta(app_detail)
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Status",       m.get("applicationStatusDescriptionText", "N/A"))
-        c2.metric("Filing Date",  m.get("filingDate", "N/A"))
-        c3.metric("Patent #",     uspto_api.get_patent_number(app_detail) or "—")
-
-        st.markdown(f"**Title:** {m.get('inventionTitle', 'N/A')}")
-        st.markdown(
-            f"**Examiner:** {m.get('examinerNameText', 'N/A')} &nbsp;|&nbsp; "
-            f"**Art Unit:** {m.get('groupArtUnitNumber', 'N/A')}"
-        )
-
-        if transactions:
-            st.subheader("Prosecution Timeline")
-            tx_rows = [
-                {
-                    "Date":  t.get("eventDate", ""),
-                    "Code":  t.get("eventCode", ""),
-                    "Event": t.get("eventDescriptionText", ""),
-                }
-                for t in sorted(transactions, key=lambda x: x.get("eventDate", ""))
-            ]
-            st.dataframe(pd.DataFrame(tx_rows), use_container_width=True)
-        else:
-            st.info("Transaction history not available for this application.")
-    else:
-        st.error(f"Application {sel_num} not found.")
+# -- Row click -> navigate to Application Detail
+selected_rows = selection.selection.rows
+if selected_rows:
+    sel_app_num = str(df.iloc[selected_rows[0]]["App #"])
+    st.session_state.detail_app_num = sel_app_num
+    st.switch_page("pages/9_Application_Detail.py")
 
 st.caption("Data: USPTO Open Data Portal (api.uspto.gov) — live query, updated daily.")

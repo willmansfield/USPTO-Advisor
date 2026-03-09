@@ -40,6 +40,31 @@ if not apps:
     st.warning(f"No applications found for '{entity}'. Try a shorter or different name.")
     st.stop()
 
+# -- Assignee disambiguation
+unique_assignees = sorted({
+    uspto_api.get_assignee(a) for a in apps if uspto_api.get_assignee(a)
+})
+if len(unique_assignees) > 1:
+    if "portfolio_assignee_choice" not in st.session_state:
+        st.session_state.portfolio_assignee_choice = unique_assignees[0]
+    with st.form("disambig_form"):
+        chosen = st.selectbox(
+            "Multiple assignee names found - select one to analyse:",
+            options=unique_assignees,
+            index=unique_assignees.index(st.session_state.portfolio_assignee_choice)
+            if st.session_state.portfolio_assignee_choice in unique_assignees else 0,
+        )
+        if st.form_submit_button("View This Assignee"):
+            st.session_state.portfolio_assignee_choice = chosen
+            st.rerun()
+    apps = [a for a in apps if uspto_api.get_assignee(a) == st.session_state.portfolio_assignee_choice]
+    entity = st.session_state.portfolio_assignee_choice
+    if not apps:
+        st.warning("No applications matched the selected assignee.")
+        st.stop()
+else:
+    st.session_state.pop("portfolio_assignee_choice", None)
+
 stats = compute_examiner_score(apps)
 
 # ── Header ────────────────────────────────────────────────────────────────────
@@ -143,4 +168,4 @@ with st.expander("View Raw Application Data"):
     ]
     st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
-st.caption("Data: USPTO Open Data Portal – sample up to 200 most-recent applications.")
+st.caption("Data: USPTO Open Data Portal – sample up to 500 most-recent applications.")
