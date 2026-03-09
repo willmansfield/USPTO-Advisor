@@ -284,33 +284,81 @@ def get_oa_documents(app_num: str) -> list[dict]:
     return [doc for doc in data.get("documentBag", []) if doc.get("documentCode") in OA_CODES]
 
 
-def fetch_oa_text(app_num: str, doc_identifier: str) -> str:
-    """Download the XML archive for an OA document and return extracted plain text."""
+def _extract_xml_from_tar(content: bytes) -> str:
+    """Return the XML string from the first readable file in a tar archive."""
     import io
-    import re as _re
     import tarfile
+
+    tf = tarfile.open(fileobj=io.BytesIO(content))
+    for member in tf.getmembers():
+        if not member.isfile():
+            continue
+        f = tf.extractfile(member)
+        if f is None:
+            continue
+        raw = f.read().decode("utf-8", errors="replace")
+        if raw.strip():
+            return raw
+    raise ValueError("Archive contains no readable files")
+
+
+def _xml_to_text(xml_str: str) -> str:
+    """
+    Extract readable text from a USPTO XML string.
+
+    Strategy 1 — known paragraph namespaces (structured, clean output).
+    Strategy 2 — itertext() across the entire element tree.
+    Strategy 3 — regex tag-strip (may leave some markup artifacts, but always
+                  returns something rather than silently failing).
+    """
+    import re as _re
     import xml.etree.ElementTree as ET
 
+    # Remove processing instructions that confuse ElementTree
+    clean = _re.sub(r"<\?[^?]+\?>", "", xml_str)
+
+    try:
+        root = ET.fromstring(clean)
+
+        # Try known paragraph-level namespaces used by USPTO documents
+        for ns in (
+            "urn:us:gov:doc:uspto:common",
+            "urn:us:gov:doc:uspto:patent",
+            "",  # no namespace
+        ):
+            tag = f"{{{ns}}}P" if ns else "P"
+            paragraphs = [
+                "".join(el.itertext()).strip()
+                for el in root.iter(tag)
+            ]
+            paragraphs = [p for p in paragraphs if p]
+            if paragraphs:
+                return "\n\n".join(paragraphs)
+
+        # No known paragraph elements — dump all text from the tree
+        text = "".join(root.itertext()).strip()
+        if text:
+            return text
+
+    except ET.ParseError:
+        pass
+
+    # Last resort: strip XML tags with regex.
+    # Some markup artifacts may remain, which is acceptable.
+    text = _re.sub(r"<[^>]+>", " ", xml_str)
+    text = _re.sub(r"\s{2,}", " ", text).strip()
+    return text if text else xml_str
+
+
+def fetch_oa_text(app_num: str, doc_identifier: str) -> str:
+    """Download the XML archive for an OA document and return extracted plain text."""
     clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
     url = f"https://api.uspto.gov/api/v1/download/applications/{clean}/{doc_identifier}/xmlarchive"
     p, h = _auth()
     r = requests.get(url, params=p, headers=h, timeout=30, verify=False)
     r.raise_for_status()
-
-    tf = tarfile.open(fileobj=io.BytesIO(r.content))
-    xml_str = tf.extractfile(tf.getmembers()[0]).read().decode("utf-8", errors="replace")
-
-    # Strip processing instructions that ElementTree cannot handle mid-document
-    xml_str = _re.sub("<[?][^?]+[?]>", "", xml_str)
-
-    root = ET.fromstring(xml_str)
-    USCOM = "urn:us:gov:doc:uspto:common"
-    paragraphs = [
-        "".join(el.itertext()).strip()
-        for el in root.iter("{" + USCOM + "}P")
-    ]
-    newline = chr(10)
-    return (newline + newline).join(t for t in paragraphs if t)
+    xml_str = _extract_xml_from_tar(r.content)
+    return _xml_to_text(xml_str)
 
 
 
@@ -330,9 +378,7 @@ def _text_no_del(el):
 
 def fetch_claims_text(app_num: str) -> str:
     """Fetch the most recent claims document and return numbered claim text."""
-    import io
     import re as _re
-    import tarfile
     import xml.etree.ElementTree as ET
 
     clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
@@ -354,11 +400,15 @@ def fetch_claims_text(app_num: str) -> str:
     r = requests.get(dl_url, params=p, headers=h, timeout=30, verify=False)
     r.raise_for_status()
 
-    tf = tarfile.open(fileobj=io.BytesIO(r.content))
-    xml_str = tf.extractfile(tf.getmembers()[0]).read().decode("utf-8", errors="replace")
-    xml_str = _re.sub("<[?][^?]+[?]>", "", xml_str)
+    xml_str = _extract_xml_from_tar(r.content)
+    xml_str = _re.sub(r"<\?[^?]+\?>", "", xml_str)
 
-    root = ET.fromstring(xml_str)
+    try:
+        root = ET.fromstring(xml_str)
+    except ET.ParseError:
+        # Fall back to generic text extraction if structured parse fails
+        return _xml_to_text(xml_str)
+
     USPAT = "urn:us:gov:doc:uspto:patent"
     PAT = "http://www.wipo.int/standards/XMLSchema/ST96/Patent"
 
@@ -372,10 +422,13 @@ def fetch_claims_text(app_num: str) -> str:
             if t:
                 parts.append(t)
         if parts:
-            claims.append(" ".join(parts))
+            claims.append(f"{num}. {' '.join(parts)}")
 
-    newline = chr(10)
-    return (newline + newline).join(claims)
+    if claims:
+        return "\n\n".join(claims)
+
+    # No claim elements found — fall back to generic extraction
+    return _xml_to_text(xml_str)
 
 @_cache
 def get_all_documents(app_num: str) -> list[dict]:
@@ -387,11 +440,6 @@ def get_all_documents(app_num: str) -> list[dict]:
     except Exception:
         return []
     return data.get("documentBag", [])
-
-
-def fetch_document_text(app_num: str, doc_identifier: str) -> str:
-    """Generic document text extractor - works for any XML-archive document."""
-    return fetch_oa_text(app_num, doc_identifier)
 
 
 def fetch_document_text(app_num: str, doc_identifier: str) -> str:

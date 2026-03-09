@@ -141,9 +141,13 @@ with tab_ai:
     if not openai_service._check():
         st.warning("Set **OPENAI_API_KEY** in `.env` to enable AI analysis.")
     else:
+        # Track cache keys so the export section can always find them
+        cache_key_summary = f"summary_{app_num}"
+        cache_key_oa = None
+        cache_key_strat = None
+
         # ── Prosecution narrative ──────────────────────────────────────────────
         st.markdown("### Prosecution Summary")
-        cache_key_summary = f"summary_{app_num}"
         if cache_key_summary not in st.session_state:
             with st.spinner("Generating prosecution summary…"):
                 # Build a compact context string for the AI
@@ -192,7 +196,7 @@ with tab_ai:
             oa_label = f"{latest_oa.get('mailDate','')[:10]}  {latest_oa.get('documentCode','')}  {latest_oa.get('documentDescription','')}"
             st.caption(f"Loaded: **{oa_label}**")
 
-            cache_key_oa = f"oa_analysis_{app_num}_{latest_oa.get('documentIdentifier','')}"
+            cache_key_oa = f"oa_analysis_{app_num}_{latest_oa.get('documentIdentifier', '')}"
             if cache_key_oa not in st.session_state:
                 with st.spinner("Fetching and analysing the office action…"):
                     oa_text = uspto_api.fetch_oa_text(app_num, latest_oa.get("documentIdentifier",""))
@@ -208,7 +212,7 @@ with tab_ai:
             if oa_text:
                 st.markdown("---")
                 st.markdown("### Response Strategy")
-                cache_key_strat = f"strategy_{app_num}_{latest_oa.get('documentIdentifier','')}"
+                cache_key_strat = f"strategy_{app_num}_{latest_oa.get('documentIdentifier', '')}"
                 if cache_key_strat not in st.session_state:
                     with st.spinner("Fetching claims and generating response strategy…"):
                         claims_text = uspto_api.fetch_claims_text(app_num)
@@ -225,6 +229,29 @@ with tab_ai:
                     if st.button("Generate strategy for these claims") and custom_claims:
                         with st.spinner("Generating…"):
                             st.markdown(openai_service.response_strategy(oa_text, custom_claims))
+
+        # ── Export ────────────────────────────────────────────────────────────
+        st.markdown("---")
+        export_parts = [
+            f"# Patent Analysis: {app_num}",
+            f"**{m.get('inventionTitle', '')}**",
+            f"Examiner: {examiner_name} | Art Unit: {art_unit}",
+            f"Status: {m.get('applicationStatusDescriptionText', outcome.title())}",
+            "",
+        ]
+        if cache_key_summary in st.session_state:
+            export_parts += ["## Prosecution Summary", st.session_state[cache_key_summary], ""]
+        if cache_key_oa and cache_key_oa in st.session_state:
+            _, _oa_analysis = st.session_state[cache_key_oa]
+            export_parts += ["## Office Action Analysis", _oa_analysis, ""]
+        if cache_key_strat and cache_key_strat in st.session_state:
+            export_parts += ["## Response Strategy", st.session_state[cache_key_strat], ""]
+        st.download_button(
+            "⬇️ Export Analysis",
+            data="\n".join(export_parts),
+            file_name=f"analysis_{app_num}.md",
+            mime="text/markdown",
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
