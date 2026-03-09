@@ -29,7 +29,7 @@ OA_TEXT_URL = "https://efts.uspto.gov/LATEST/search-index"
 
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL   = "gpt-4.5"
+OPENAI_MODEL   = "gpt-5.4"
 
 # ── App settings ──────────────────────────────────────────────────────────────
 APP_TITLE   = "USPTO Advisor"
