@@ -341,13 +341,16 @@ with tab_docs:
                 for p in (doc.get("pageBag") or [])
             )
 
-            col_info, col_pdf = st.columns([4, 1])
+            col_info, col_pdf = st.columns([5, 1])
             with col_info:
                 st.markdown(
-                    f"<p style='margin:0.1rem 0;font-size:0.85rem;'>"
-                    f"<span style='color:#64748b;'>{date}</span> &nbsp;"
-                    f"<code style='background:#f1f5f9;padding:1px 6px;border-radius:4px;font-size:0.75rem;'>{code}</code>"
-                    f"&nbsp; {desc}</p>",
+                    f"<div style='padding:0.5rem 0;border-bottom:1px solid #f1f5f9;'>"
+                    f"<div style='font-size:0.8rem;color:#64748b;margin-bottom:0.2rem;'>{date}"
+                    f"&nbsp;&nbsp;<code style='background:#f1f5f9;padding:2px 7px;border-radius:4px;"
+                    f"font-size:0.75rem;color:#1e293b;'>{code}</code></div>"
+                    f"<div style='font-size:1rem;color:#1e293b;font-weight:500;"
+                    f"white-space:normal;word-break:break-word;'>{desc}</div>"
+                    f"</div>",
                     unsafe_allow_html=True,
                 )
             with col_pdf:
