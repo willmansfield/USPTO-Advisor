@@ -439,7 +439,12 @@ def general_chat(messages: list[dict], use_tools: bool = True) -> tuple[str, lis
         "art units, or assignees. Be concise, precise, and professional."
     )
 
-    api_messages = [{"role": "system", "content": system}] + list(messages)
+    # Strip display-only keys (tool_calls are stored as string summaries for the
+    # UI but must not be sent to the API — the API expects tool call objects).
+    api_messages = [{"role": "system", "content": system}] + [
+        {k: v for k, v in m.items() if k in ("role", "content")}
+        for m in messages
+    ]
     tool_calls_made: list[str] = []
 
     for _ in range(5):  # max 5 tool-call rounds
