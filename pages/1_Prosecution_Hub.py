@@ -257,9 +257,9 @@ with tab_ai:
                 st.info("No office actions found in the file wrapper for this application.")
             else:
                 oa_label = (
-                    f"{latest_oa.get('mailDate','')[:10]}  "
+                    f"{latest_oa.get('officialDate','')[:10]}  "
                     f"{latest_oa.get('documentCode','')}  "
-                    f"{latest_oa.get('documentDescription','')}"
+                    f"{latest_oa.get('documentCodeDescriptionText','')}"
                 )
                 st.caption(f"Loaded: **{oa_label}**")
                 oa_text, oa_analysis = st.session_state.get(cache_key_oa, ("", ""))
@@ -329,16 +329,16 @@ with tab_docs:
 
         for doc in docs:
             code   = doc.get("documentCode", "")
-            desc   = doc.get("documentDescription", code)
-            date   = (doc.get("mailDate") or "")[:10]
+            desc   = doc.get("documentCodeDescriptionText", code)
+            date   = (doc.get("officialDate") or "")[:10]
             doc_id = doc.get("documentIdentifier", "")
             has_xml = any(
-                p.get("mimeTypeCategory") == "XML"
-                for p in (doc.get("pageBag") or [])
+                p.get("mimeTypeIdentifier") == "XML"
+                for p in (doc.get("downloadOptionBag") or [])
             )
             has_pdf = any(
-                p.get("mimeTypeCategory") == "PDF"
-                for p in (doc.get("pageBag") or [])
+                p.get("mimeTypeIdentifier") == "PDF"
+                for p in (doc.get("downloadOptionBag") or [])
             )
 
             col_info, col_pdf = st.columns([5, 1])

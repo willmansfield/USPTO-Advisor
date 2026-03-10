@@ -570,7 +570,7 @@ def fetch_document_text(app_num: str, doc_identifier: str) -> str:
 def fetch_pdf(app_num: str, doc_identifier: str) -> bytes:
     """Download the PDF for a document and return raw bytes."""
     clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
-    url = f"https://api.uspto.gov/api/v1/download/applications/{clean}/{doc_identifier}/pdf"
+    url = f"https://api.uspto.gov/api/v1/download/applications/{clean}/{doc_identifier}.pdf"
     p, h = _auth()
     with _API_LOCK:
         for attempt in range(1, _MAX_RETRIES + 1):
