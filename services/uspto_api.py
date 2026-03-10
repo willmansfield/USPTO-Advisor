@@ -446,3 +446,14 @@ def get_all_documents(app_num: str) -> list[dict]:
 def fetch_document_text(app_num: str, doc_identifier: str) -> str:
     """Generic document text extractor - works for any XML-archive document."""
     return fetch_oa_text(app_num, doc_identifier)
+
+
+@_cache
+def fetch_pdf(app_num: str, doc_identifier: str) -> bytes:
+    """Download the PDF for a document and return raw bytes."""
+    clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
+    url = f"https://api.uspto.gov/api/v1/download/applications/{clean}/{doc_identifier}/pdf"
+    p, h = _auth()
+    r = requests.get(url, params=p, headers=h, timeout=30, verify=False)
+    r.raise_for_status()
+    return r.content
