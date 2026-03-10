@@ -22,6 +22,8 @@ Key ODP response schema (patentFileWrapperDataBag[]):
   eventDataBag[]:  { eventCode, eventDescriptionText, eventDate }
   assignmentBag[]: { assigneeBag[].assigneeNameText, ... }
   grantDocumentMetaData: { patentNumber }  (present when granted)
+  correspondenceAddressBag[]: { nameLineOneText }  (top-level; law firm / correspondent name)
+  recordAttorney: { customerNumberCorrespondenceData.powerOfAttorneyAddressBag[].nameLineOneText }
 """
 
 from __future__ import annotations
@@ -578,25 +580,46 @@ def fetch_pdf(app_num: str, doc_identifier: str) -> bytes:
     return b""  # unreachable
 
 
+def _corr_name(doc: dict) -> str:
+    """Extract the correspondent/law firm name from the top-level correspondenceAddressBag."""
+    cab = doc.get("correspondenceAddressBag") or []
+    if cab:
+        return cab[0].get("nameLineOneText", "")
+    return ""
+
+
+def _q_clean(term: str) -> str:
+    """
+    Strip characters that break ODP Lucene quoted-phrase queries, then
+    normalise whitespace.  The ODP tokeniser treats '&', '(', ')' etc.
+    as whitespace, so removing them still matches canonical stored names.
+    """
+    import re as _re
+    cleaned = _re.sub(r"[&()\[\]{}.,]", " ", term)
+    return _re.sub(r"\s+", " ", cleaned).strip()
+
+
 @_cache
 def get_law_firm_name_variants(term: str) -> dict:
     """
-    Fetch first 50 ODP results for *term* searched against corresOrganizationName
-    and return a dict of {name: count_in_sample} for unique firm names found.
+    Fetch first 50 ODP results for *term* searched against
+    correspondenceAddressBag.nameLineOneText and return a dict of
+    {name: count_in_sample} for unique correspondent names found.
     """
     from collections import Counter as _Counter
-    first_word = term.split()[0]
+    clean = _q_clean(term)
+    first_word = clean.split()[0]
     for q in [
-        f'applicationMetaData.corresOrganizationName:"{term}"',
-        f"applicationMetaData.corresOrganizationName:{first_word}",
+        f'correspondenceAddressBag.nameLineOneText:"{clean}"',
+        f"correspondenceAddressBag.nameLineOneText:{first_word}",
     ]:
         data = _safe_query(q, limit=50)
         docs = data.get("patentFileWrapperDataBag", [])
         if docs:
             counts = _Counter(
-                meta(d).get("corresOrganizationName", "")
+                _corr_name(d)
                 for d in docs
-                if meta(d).get("corresOrganizationName")
+                if _corr_name(d)
             )
             if counts:
                 return dict(counts.most_common(10))
@@ -605,17 +628,20 @@ def get_law_firm_name_variants(term: str) -> dict:
 
 @_cache
 def law_firm_filing_count(name: str) -> int:
-    """Return total ODP application count for an exact law firm name match."""
-    data = _safe_query(f'applicationMetaData.corresOrganizationName:"{name}"', limit=1)
+    """Return total ODP application count for a correspondent name match."""
+    clean = _q_clean(name)
+    data = _safe_query(f'correspondenceAddressBag.nameLineOneText:"{clean}"', limit=1)
     return int(data.get("count", 0))
 
 
 @_cache
 def search_by_law_firm(firm_name: str) -> list[dict]:
     """Fetch applications where the correspondent is the given law firm."""
+    clean = _q_clean(firm_name)
+    first_word = clean.split()[0]
     for q in [
-        f'applicationMetaData.corresOrganizationName:"{firm_name}"',
-        f"applicationMetaData.corresOrganizationName:{firm_name.split()[0]}",
+        f'correspondenceAddressBag.nameLineOneText:"{clean}"',
+        f"correspondenceAddressBag.nameLineOneText:{first_word}",
     ]:
         apps = _fetch_all(q)
         if apps:
