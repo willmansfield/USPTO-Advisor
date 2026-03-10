@@ -511,7 +511,7 @@ def score_card_html(score, band: str, color: str, total: int = 0) -> str:
     <div class="score-bar-bg">
       <div class="score-bar-fill" style="width:{score_val}%;background:{color};"></div>
     </div>
-    <div class="score-sub">{sub} &nbsp;· &nbsp;out of 100</div>
+    <div class="score-sub">{sub}</div>
   </div>
 </div>
 """
