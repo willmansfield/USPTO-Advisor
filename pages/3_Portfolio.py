@@ -135,11 +135,6 @@ if not confirmed:
         st.error(f"No matching companies found for **{search_term}**. Try a different name or spelling.")
         st.stop()
 
-    # Auto-confirm when only one result
-    if len(candidates) == 1:
-        st.session_state["portfolio_confirmed"] = candidates[0]["Name"]
-        st.rerun()
-
     st.markdown("### Select company to analyse")
     st.caption(
         f"Found **{len(candidates)}** matching name variants in the USPTO database. "

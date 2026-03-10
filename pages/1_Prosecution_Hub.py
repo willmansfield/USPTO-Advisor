@@ -122,109 +122,162 @@ if examiner_name:
 
 st.markdown("---")
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
+# ── Tabs — Timeline is default (first) ───────────────────────────────────────
 
-tab_ai, tab_timeline, tab_docs = st.tabs(["🤖 AI Analysis", "📋 Prosecution Timeline", "📄 Documents"])
+tab_timeline, tab_ai, tab_docs = st.tabs(["📋 Prosecution Timeline", "🤖 AI Analysis", "📄 Documents"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Tab 1 – AI Analysis  (auto-runs)
+# Tab 1 – Prosecution Timeline  (default)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+with tab_timeline:
+    if not events:
+        st.info("No prosecution events found.")
+    else:
+        st.markdown(f"**{len(events)} prosecution events** (most recent first)")
+        for e in reversed(events):
+            code = e.get("eventCode", "")
+            icon = _event_icon(code)
+            date = (e.get("eventDate") or "")[:10]
+            desc = e.get("eventDescriptionText", "")
+            st.markdown(
+                f"{icon} &nbsp; `{date}` &nbsp; **{code}** &nbsp; — &nbsp; {desc}",
+                unsafe_allow_html=False,
+            )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tab 2 – AI Analysis  (parallel load)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with tab_ai:
     if not openai_service._check():
         st.warning("Set **OPENAI_API_KEY** in `.env` to enable AI analysis.")
     else:
-        # Track cache keys so the export section can always find them
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+
+        # ── Cache keys ────────────────────────────────────────────────────────
         cache_key_summary = f"summary_{app_num}"
-        cache_key_oa = None
-        cache_key_strat = None
 
-        # ── Prosecution narrative ──────────────────────────────────────────────
+        # Fetch OA doc list upfront (cheap — cached after first call)
+        oa_docs = uspto_api.get_oa_documents(app_num)
+        latest_oa = oa_docs[0] if oa_docs else None
+        _doc_id = latest_oa.get("documentIdentifier", "") if latest_oa else ""
+        cache_key_oa   = f"oa_analysis_{app_num}_{_doc_id}" if latest_oa else None
+        cache_key_strat = f"strategy_{app_num}_{_doc_id}"   if latest_oa else None
+
+        need_summary = cache_key_summary not in st.session_state
+        need_oa      = bool(cache_key_oa and cache_key_oa not in st.session_state)
+
+        # ── Build summary context (sync, no I/O) ──────────────────────────────
+        event_summary = "\n".join(
+            f"{e.get('eventDate','')[:10]}  [{e.get('eventCode','')}]  {e.get('eventDescriptionText','')}"
+            for e in events[:30]
+        )
+        _ctx = (
+            f"Application: {app_num}\n"
+            f"Title: {m.get('inventionTitle','')}\n"
+            f"Outcome: {outcome}\n"
+            f"Examiner: {examiner_name}  Art Unit: {art_unit}\n"
+            f"Assignee: {assignee}\n"
+            f"Filed: {m.get('filingDate','')[:10]}\n"
+            f"Office actions: {count_office_actions(app_data)}  "
+            f"RCEs: {count_rces(app_data)}  "
+            f"Pendency: {pendency_months(app_data)} months\n\n"
+            f"Prosecution events:\n{event_summary}"
+        )
+        if examiner_stats:
+            _ctx += (
+                f"\n\nExaminer profile: {examiner_stats['band']} "
+                f"({examiner_stats['score']}/100), "
+                f"{examiner_stats['allowance_rate']}% allowance rate, "
+                f"{examiner_stats['avg_oa']} avg OAs."
+            )
+        _sys_p = (
+            "You are a senior patent attorney. Given the prosecution history below, "
+            "write a 2-3 paragraph narrative that: (1) describes what happened in prosecution, "
+            "(2) notes the examiner's difficulty and approach, and (3) gives a practical assessment "
+            "of the current position and recommended next steps. Be specific and professional."
+        )
+
+        # ── Worker functions ──────────────────────────────────────────────────
+        def _gen_summary():
+            try:
+                return openai_service._chat(_sys_p, _ctx)
+            except Exception as e:
+                return f"⚠️ AI request failed: {e}"
+
+        def _fetch_and_analyse_oa():
+            try:
+                text = uspto_api.fetch_oa_text(app_num, _doc_id)
+                analysis = openai_service.analyze_office_action(text)
+                return text, analysis
+            except Exception as e:
+                return "", f"⚠️ Could not analyse office action: {e}"
+
+        # ── Phase 1: run summary + OA analysis in parallel ────────────────────
+        tasks = {}
+        if need_summary:
+            tasks["summary"] = _gen_summary
+        if need_oa:
+            tasks["oa"] = _fetch_and_analyse_oa
+
+        if tasks:
+            _msgs = {
+                frozenset(["summary", "oa"]): "Generating prosecution summary and office action analysis…",
+                frozenset(["summary"]):       "Generating prosecution summary…",
+                frozenset(["oa"]):            "Fetching and analysing the office action…",
+            }
+            with st.spinner(_msgs[frozenset(tasks)]):
+                with _TPE(max_workers=len(tasks)) as _pool:
+                    _futs = {k: _pool.submit(fn) for k, fn in tasks.items()}
+                    for k, fut in _futs.items():
+                        try:
+                            result = fut.result()
+                        except Exception as exc:
+                            result = f"⚠️ {exc}"
+                        if k == "summary":
+                            st.session_state[cache_key_summary] = result
+                        elif k == "oa":
+                            st.session_state[cache_key_oa] = result if isinstance(result, tuple) else ("", result)
+
+        # ── Display prosecution summary ───────────────────────────────────────
         st.markdown("### Prosecution Summary")
-        if cache_key_summary not in st.session_state:
-            with st.spinner("Generating prosecution summary…"):
-                # Build a compact context string for the AI
-                event_summary = "\n".join(
-                    f"{e.get('eventDate','')[:10]}  [{e.get('eventCode','')}]  {e.get('eventDescriptionText','')}"
-                    for e in events[:30]
-                )
-                ctx = (
-                    f"Application: {app_num}\n"
-                    f"Title: {m.get('inventionTitle','')}\n"
-                    f"Outcome: {outcome}\n"
-                    f"Examiner: {examiner_name}  Art Unit: {art_unit}\n"
-                    f"Assignee: {assignee}\n"
-                    f"Filed: {m.get('filingDate','')[:10]}\n"
-                    f"Office actions: {count_office_actions(app_data)}  "
-                    f"RCEs: {count_rces(app_data)}  "
-                    f"Pendency: {pendency_months(app_data)} months\n\n"
-                    f"Prosecution events:\n{event_summary}"
-                )
-                if examiner_stats:
-                    ctx += (
-                        f"\n\nExaminer profile: {examiner_stats['band']} "
-                        f"({examiner_stats['score']}/100), "
-                        f"{examiner_stats['allowance_rate']}% allowance rate, "
-                        f"{examiner_stats['avg_oa']} avg OAs."
-                    )
-                sys_p = (
-                    "You are a senior patent attorney. Given the prosecution history below, "
-                    "write a 2-3 paragraph narrative that: (1) describes what happened in prosecution, "
-                    "(2) notes the examiner's difficulty and approach, and (3) gives a practical assessment "
-                    "of the current position and recommended next steps. Be specific and professional."
-                )
-                summary = openai_service._chat(sys_p, ctx)
-                st.session_state[cache_key_summary] = summary
-        st.markdown(st.session_state[cache_key_summary])
-
+        st.markdown(st.session_state.get(cache_key_summary, ""))
         st.markdown("---")
 
-        # ── Office Action analysis ─────────────────────────────────────────────
+        # ── Display OA analysis ───────────────────────────────────────────────
         st.markdown("### Most Recent Office Action")
-        oa_docs = uspto_api.get_oa_documents(app_num)
         if not oa_docs:
             st.info("No office actions found in the file wrapper for this application.")
         else:
-            latest_oa = oa_docs[0]
-            oa_label = f"{latest_oa.get('mailDate','')[:10]}  {latest_oa.get('documentCode','')}  {latest_oa.get('documentDescription','')}"
+            oa_label = (
+                f"{latest_oa.get('mailDate','')[:10]}  "
+                f"{latest_oa.get('documentCode','')}  "
+                f"{latest_oa.get('documentDescription','')}"
+            )
             st.caption(f"Loaded: **{oa_label}**")
-
-            cache_key_oa = f"oa_analysis_{app_num}_{latest_oa.get('documentIdentifier', '')}"
-            if cache_key_oa not in st.session_state:
-                with st.spinner("Fetching and analysing the office action…"):
-                    try:
-                        oa_text = uspto_api.fetch_oa_text(app_num, latest_oa.get("documentIdentifier", ""))
-                    except Exception as e:
-                        oa_text = ""
-                        st.warning(f"Could not fetch office action document: {e}")
-                    if oa_text:
-                        analysis = openai_service.analyze_office_action(oa_text)
-                        st.session_state[cache_key_oa] = (oa_text, analysis)
-                    else:
-                        st.session_state[cache_key_oa] = ("", "Could not extract OA text from this document.")
-            oa_text, oa_analysis = st.session_state[cache_key_oa]
+            oa_text, oa_analysis = st.session_state.get(cache_key_oa, ("", ""))
             st.markdown(oa_analysis)
 
-            # ── Response strategy ──────────────────────────────────────────────
+            # ── Phase 2: response strategy (depends on OA text, sequential) ───
             if oa_text:
                 st.markdown("---")
                 st.markdown("### Response Strategy")
-                cache_key_strat = f"strategy_{app_num}_{latest_oa.get('documentIdentifier', '')}"
                 if cache_key_strat not in st.session_state:
                     with st.spinner("Fetching claims and generating response strategy…"):
                         try:
                             claims_text = uspto_api.fetch_claims_text(app_num)
                         except Exception:
                             claims_text = ""
-                        if claims_text:
-                            strategy = openai_service.response_strategy(oa_text, claims_text)
-                        else:
-                            strategy = openai_service.response_strategy(oa_text, "(claims not available)")
+                        strategy = openai_service.response_strategy(
+                            oa_text,
+                            claims_text if claims_text else "(claims not available)",
+                        )
                         st.session_state[cache_key_strat] = strategy
                 st.markdown(st.session_state[cache_key_strat])
 
-                # Allow editing claims for custom strategy
                 with st.expander("✏️ Custom response strategy with different claims"):
                     custom_claims = st.text_area("Paste amended claims here", height=200, key="custom_claims")
                     if st.button("Generate strategy for these claims") and custom_claims:
@@ -253,26 +306,6 @@ with tab_ai:
             file_name=f"analysis_{app_num}.md",
             mime="text/markdown",
         )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Tab 2 – Prosecution Timeline
-# ═══════════════════════════════════════════════════════════════════════════════
-
-with tab_timeline:
-    if not events:
-        st.info("No prosecution events found.")
-    else:
-        st.markdown(f"**{len(events)} prosecution events** (most recent first)")
-        for e in reversed(events):
-            code = e.get("eventCode", "")
-            icon = _event_icon(code)
-            date = (e.get("eventDate") or "")[:10]
-            desc = e.get("eventDescriptionText", "")
-            st.markdown(
-                f"{icon} &nbsp; `{date}` &nbsp; **{code}** &nbsp; — &nbsp; {desc}",
-                unsafe_allow_html=False,
-            )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

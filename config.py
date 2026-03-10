@@ -29,12 +29,12 @@ OA_TEXT_URL = "https://efts.uspto.gov/LATEST/search-index"
 
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL   = "gpt-5.4"
+OPENAI_MODEL   = "gpt-5-mini"
 
 # ── App settings ──────────────────────────────────────────────────────────────
 APP_TITLE   = "USPTO Advisor"
-PAGE_LIMIT  = 50   # records per PEDS page
-MAX_PAGES   = 10   # max pages to fetch for examiner stats (= 500 apps)
+PAGE_LIMIT  = 100  # records per ODP page (API max is 100)
+MAX_PAGES   = 20   # max pages to fetch (= 2 000 apps)
 
 # Examiner difficulty thresholds (based on allowance rate %)
 SCORE_GREEN  = 60   # >= 60 % → Easy
