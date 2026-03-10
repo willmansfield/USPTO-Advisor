@@ -48,14 +48,36 @@ html, body, [class*="css"] {
     font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
 }
 
+/* Prevent any element from causing horizontal scroll */
+html, body {
+    overflow-x: hidden !important;
+    max-width: 100vw !important;
+}
+
 /* Page background */
 .stApp {
     background-color: #f0f4f8;
+    overflow-x: hidden !important;
 }
 
 /* Main content area */
 section[data-testid="stMain"] > div {
     padding-top: 1.5rem;
+    max-width: 100% !important;
+    overflow-x: hidden !important;
+}
+
+/* Ensure all block containers stay within viewport */
+[data-testid="stVerticalBlock"],
+[data-testid="stHorizontalBlock"],
+.block-container {
+    max-width: 100% !important;
+    overflow-x: hidden !important;
+}
+
+/* Plotly charts and iframes — never exceed parent width */
+.stPlotlyChart, iframe {
+    max-width: 100% !important;
 }
 
 /* ── Sidebar ── */
