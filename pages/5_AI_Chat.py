@@ -53,7 +53,7 @@ SUGGESTIONS = [
     "What makes a claim more likely to be allowed in software art units?",
 ]
 
-if not st.session_state.chat_messages:
+if not st.session_state.chat_messages and "chat_pending" not in st.session_state:
     st.markdown(
         "<p style='font-size:0.85rem;color:#64748b;font-weight:600;text-transform:uppercase;"
         "letter-spacing:0.06em;margin-bottom:0.75rem;'>Try asking</p>",
@@ -67,7 +67,7 @@ if not st.session_state.chat_messages:
         col = col1 if i % 2 == 0 else col2
         with col:
             if st.button(q, use_container_width=True, key=f"sug_{i}"):
-                st.session_state.chat_messages.append({"role": "user", "content": q})
+                st.session_state["chat_pending"] = q
                 st.rerun()
 
     # Extra pill CSS to style the suggestion buttons differently
@@ -112,6 +112,10 @@ for msg in st.session_state.chat_messages:
 # ── Input ──────────────────────────────────────────────────────────────────────
 
 prompt = st.chat_input("Ask about an examiner, application, company, PTAB decision, claim strategy…")
+
+# Pick up a suggestion-button click from the previous rerun
+if not prompt and "chat_pending" in st.session_state:
+    prompt = st.session_state.pop("chat_pending")
 
 if prompt:
     st.session_state.chat_messages.append({"role": "user", "content": prompt})
