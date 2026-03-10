@@ -443,6 +443,38 @@ def get_all_documents(app_num: str) -> list[dict]:
 
 
 @_cache
+def get_applicant_name_variants(term: str) -> dict:
+    """
+    Fetch first 50 ODP results for *term* and return a dict of
+    {firstApplicantName: count_in_sample} for every unique name found.
+    Tries an exact-phrase query first, falls back to first-word.
+    """
+    from collections import Counter as _Counter
+    first_word = term.split()[0]
+    for q in [
+        f'applicationMetaData.firstApplicantName:"{term}"',
+        f"applicationMetaData.firstApplicantName:{first_word}",
+    ]:
+        data = _safe_query(q, limit=50)
+        docs = data.get("patentFileWrapperDataBag", [])
+        if docs:
+            counts = _Counter(
+                meta(d).get("firstApplicantName", "")
+                for d in docs
+                if meta(d).get("firstApplicantName")
+            )
+            return dict(counts.most_common(10))
+    return {}
+
+
+@_cache
+def odp_filing_count(name: str) -> int:
+    """Return the total ODP application count for an exact firstApplicantName match."""
+    data = _safe_query(f'applicationMetaData.firstApplicantName:"{name}"', limit=1)
+    return int(data.get("count", 0))
+
+
+@_cache
 def fetch_document_text(app_num: str, doc_identifier: str) -> str:
     """Generic document text extractor - works for any XML-archive document."""
     return fetch_oa_text(app_num, doc_identifier)

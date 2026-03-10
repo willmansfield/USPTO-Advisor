@@ -5,13 +5,16 @@ Enter a company name → instant portfolio overview with outcome distribution,
 filing trends, examiner concentration, art unit breakdown, and AI executive summary.
 """
 
+import re as _re
+from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 from collections import Counter
 
 from utils.auth import require_auth, sidebar_user
-from services import uspto_api, openai_service
+from services import uspto_api, openai_service, patentsview_api
 from services.scoring import compute_examiner_score
 from services.uspto_api import meta, get_outcome, get_patent_number, get_assignee
 
@@ -22,28 +25,163 @@ st.title("💼 Portfolio")
 st.caption("Prosecution health dashboard for any company or assignee — powered by live USPTO data.")
 
 
+# ── Disambiguation helper ─────────────────────────────────────────────────────
 
-# ── Search ────────────────────────────────────────────────────────────────────
+def _norm(name: str) -> str:
+    return _re.sub(r"[.,\s]+", " ", name.lower()).strip()
 
-default_company = st.session_state.pop("portfolio_prefill", "") or ""
 
-with st.form("portfolio_form"):
+def _run_disambiguation(term: str) -> list[dict]:
+    """
+    A: ODP first-page query → unique firstApplicantName variants + sample counts.
+    C: PatentsView query → enrich with granted-patent counts.
+    B: Parallel ODP count queries → total filing count per candidate.
+    Returns a list of row dicts sorted by ODP Filings desc.
+    """
+    # Step A + C in parallel
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_odp = pool.submit(uspto_api.get_applicant_name_variants, term)
+        fut_pv  = pool.submit(patentsview_api.get_assignee_org_variants, term)
+        odp_variants = fut_odp.result()   # {odp_name: sample_count}
+        pv_variants  = fut_pv.result()    # {pv_org: grant_count}
+
+    if not odp_variants:
+        return []
+
+    # Build candidate dict keyed by normalised name; ODP names are canonical
+    cands: dict[str, dict] = {}
+    for name, cnt in odp_variants.items():
+        cands[_norm(name)] = {"Name": name, "_sample": cnt, "Granted (PatentsView)": 0}
+
+    # Enrich with PatentsView grant counts where normalised names align
+    for pv_name, cnt in pv_variants.items():
+        key = _norm(pv_name)
+        if key in cands:
+            cands[key]["Granted (PatentsView)"] = cnt
+
+    candidate_list = list(cands.values())[:8]
+
+    # Step B: parallel ODP total-count queries
+    with ThreadPoolExecutor(max_workers=len(candidate_list)) as pool:
+        fut_map = {pool.submit(uspto_api.odp_filing_count, c["Name"]): i
+                   for i, c in enumerate(candidate_list)}
+        for fut in _as_completed(fut_map):
+            i = fut_map[fut]
+            try:
+                candidate_list[i]["ODP Filings"] = fut.result()
+            except Exception:
+                candidate_list[i]["ODP Filings"] = candidate_list[i]["_sample"]
+
+    rows = [
+        {
+            "Name": c["Name"],
+            "ODP Filings": max(c.get("ODP Filings", 0), c["_sample"]),
+            "Granted (PatentsView)": c["Granted (PatentsView)"],
+        }
+        for c in candidate_list
+    ]
+    rows.sort(key=lambda r: r["ODP Filings"], reverse=True)
+    return rows
+
+
+# ── Step state ────────────────────────────────────────────────────────────────
+
+prefill    = st.session_state.pop("portfolio_prefill", "") or ""
+search_term = st.session_state.get("portfolio_search_term", prefill)
+candidates  = st.session_state.get("portfolio_candidates")   # None = not yet run
+confirmed   = st.session_state.get("portfolio_confirmed", "")
+
+# ── Search form ───────────────────────────────────────────────────────────────
+
+with st.form("portfolio_search_form"):
     col_i, col_b = st.columns([4, 1])
     with col_i:
-        company = st.text_input(
+        entered = st.text_input(
             "Company name",
-            value=default_company,
+            value=search_term,
             placeholder="e.g. Apple Inc, Google LLC, Microsoft Corporation",
             label_visibility="collapsed",
         )
     with col_b:
-        search = st.form_submit_button("Analyse portfolio", use_container_width=True)
+        find_btn = st.form_submit_button("🔍 Find candidates", use_container_width=True)
 
-if not company:
-    st.info("Enter a company or assignee name to analyse their patent portfolio.")
+if find_btn and entered:
+    # Clear downstream state on new/changed search
+    st.session_state.pop("portfolio_candidates", None)
+    st.session_state.pop("portfolio_confirmed", None)
+    st.session_state["portfolio_search_term"] = entered
+    with st.spinner("Searching USPTO and PatentsView for matching companies…"):
+        found = _run_disambiguation(entered)
+    st.session_state["portfolio_candidates"] = found
+    candidates, confirmed, search_term = found, "", entered
+    st.rerun()
+
+# Auto-run on cross-page navigation prefill
+if prefill and candidates is None:
+    st.session_state["portfolio_search_term"] = prefill
+    with st.spinner("Searching USPTO and PatentsView for matching companies…"):
+        found = _run_disambiguation(prefill)
+    st.session_state["portfolio_candidates"] = found
+    candidates, search_term = found, prefill
+
+# ── Disambiguation table ──────────────────────────────────────────────────────
+
+if not confirmed:
+    if candidates is None:
+        st.info("Enter a company or assignee name to get started.")
+        st.stop()
+
+    if not candidates:
+        st.error(f"No matching companies found for **{search_term}**. Try a different name or spelling.")
+        st.stop()
+
+    # Auto-confirm when only one result
+    if len(candidates) == 1:
+        st.session_state["portfolio_confirmed"] = candidates[0]["Name"]
+        st.rerun()
+
+    st.markdown("### Select company to analyse")
+    st.caption(
+        f"Found **{len(candidates)}** matching name variants in the USPTO database. "
+        "Select a row then click **Analyse**."
+    )
+
+    cand_df = pd.DataFrame(candidates)
+    evt = st.dataframe(
+        cand_df,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+    )
+
+    selected_name = ""
+    if evt and evt.selection.rows:
+        selected_name = candidates[evt.selection.rows[0]]["Name"]
+        st.success(f"Selected: **{selected_name}**")
+
+    col_btn, _ = st.columns([2, 3])
+    if col_btn.button(
+        "▶ Analyse this company",
+        disabled=not selected_name,
+        type="primary",
+        use_container_width=True,
+    ):
+        st.session_state["portfolio_confirmed"] = selected_name
+        st.rerun()
+
     st.stop()
 
-# ── Fetch ─────────────────────────────────────────────────────────────────────
+# ── Confirmed — show which company + allow change ────────────────────────────
+
+company = confirmed
+col_hdr, col_chg = st.columns([5, 1])
+col_hdr.caption(f"Analysing: **{company}**")
+if col_chg.button("✏️ Change", use_container_width=True):
+    st.session_state.pop("portfolio_confirmed", None)
+    st.rerun()
+
+# ── Fetch full portfolio ──────────────────────────────────────────────────────
 
 with st.spinner(f"Fetching portfolio data for {company}…"):
     apps = uspto_api.search_by_assignee(company)

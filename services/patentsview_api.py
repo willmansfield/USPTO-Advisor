@@ -74,6 +74,32 @@ def search_by_assignee(assignee: str) -> list[dict]:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def get_assignee_org_variants(term: str) -> dict:
+    """
+    Search PatentsView using the first word of *term*, return
+    {assignee_organization: grant_count} for the unique org names found.
+    Used to enrich the disambiguation table with granted-patent counts.
+    """
+    from collections import Counter
+    try:
+        first_word = term.split()[0]
+        data = _pv_query(
+            {"_text_any": {"assignee_organization": first_word}},
+            fields=["assignee_organization"],
+            per_page=100,
+        )
+        patents = data.get("patents") or []
+        counts = Counter(
+            p.get("assignee_organization", "")
+            for p in patents
+            if p.get("assignee_organization")
+        )
+        return dict(counts.most_common(15))
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def search_by_art_unit(art_unit: str) -> list[dict]:
     try:
         q = {"examiner_art_unit": art_unit}
