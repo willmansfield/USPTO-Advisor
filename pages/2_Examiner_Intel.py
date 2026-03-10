@@ -51,8 +51,11 @@ with tab_ex:
     if not ex_name:
         st.info("Enter an examiner name to load their profile.")
     else:
-        with st.spinner(f"Fetching applications for {ex_name}…"):
-            apps = uspto_api.search_by_examiner(ex_name)
+        _ex_apps_key = f"ex_apps_{ex_name}"
+        if ex_search or _ex_apps_key not in st.session_state:
+            with st.spinner(f"Fetching applications for {ex_name}…"):
+                st.session_state[_ex_apps_key] = uspto_api.search_by_examiner(ex_name)
+        apps = st.session_state[_ex_apps_key]
 
         if not apps:
             st.error(f"No applications found for **{ex_name}**.")
@@ -217,8 +220,11 @@ with tab_au:
     if not au_code:
         st.info("Enter a 4-digit art unit code to explore the examiner landscape.")
     else:
-        with st.spinner(f"Loading art unit {au_code}…"):
-            au_apps = uspto_api.search_by_art_unit(au_code)
+        _au_apps_key = f"au_apps_{au_code}"
+        if au_search or _au_apps_key not in st.session_state:
+            with st.spinner(f"Loading art unit {au_code}…"):
+                st.session_state[_au_apps_key] = uspto_api.search_by_art_unit(au_code)
+        au_apps = st.session_state[_au_apps_key]
 
         if not au_apps:
             st.error(f"No applications found for art unit **{au_code}**.")

@@ -191,8 +191,11 @@ def _render_company_tab() -> None:
         st.session_state.pop("co_confirmed", None)
         st.rerun()
 
-    with st.spinner(f"Fetching portfolio data for {company}…"):
-        apps = uspto_api.search_by_assignee(company)
+    _co_apps_key = f"co_apps_{company}"
+    if _co_apps_key not in st.session_state:
+        with st.spinner(f"Fetching portfolio data for {company}…"):
+            st.session_state[_co_apps_key] = uspto_api.search_by_assignee(company)
+    apps = st.session_state[_co_apps_key]
 
     if not apps:
         st.error(f"No applications found for **{company}**. Try a variation of the name.")
@@ -379,8 +382,11 @@ def _render_law_firm_tab() -> None:
         st.session_state.pop("lf_confirmed", None)
         st.rerun()
 
-    with st.spinner(f"Fetching prosecution data for {firm}…"):
-        apps = uspto_api.search_by_law_firm(firm)
+    _lf_apps_key = f"lf_apps_{firm}"
+    if _lf_apps_key not in st.session_state:
+        with st.spinner(f"Fetching prosecution data for {firm}…"):
+            st.session_state[_lf_apps_key] = uspto_api.search_by_law_firm(firm)
+    apps = st.session_state[_lf_apps_key]
 
     if not apps:
         st.error(f"No applications found for **{firm}**. Try a variation of the name.")
