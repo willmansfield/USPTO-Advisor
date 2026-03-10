@@ -6,6 +6,12 @@ Auth: api_key query param  +  X-API-KEY header  (both required).
 SSL:  verify=False used because this environment's cert store has a clock-skew
       issue; remove in production if not needed.
 
+Rate-limiting: USPTO ODP enforces burst=1 (no parallel requests per API key).
+  - _API_LOCK serialises every outbound call so we never have two in-flight at once.
+  - On HTTP 429 we sleep _RETRY_WAIT seconds (minimum 5 s as required) then retry,
+    up to _MAX_RETRIES attempts. The lock is held during the sleep so no other
+    thread fires against the same key while the server is overloaded.
+
 Key ODP response schema (patentFileWrapperDataBag[]):
   applicationNumberText
   applicationMetaData:
@@ -22,10 +28,10 @@ from __future__ import annotations
 
 import functools
 import logging
+import threading
 import time
 import urllib3
 import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config import (
     USPTO_API_KEY, PAGE_LIMIT, MAX_PAGES,
@@ -48,6 +54,11 @@ _PTAB_URL  = f"{_BASE}/trials/decisions/search"
 _APPS_URL  = f"{_BASE}/applications/search"
 _TIMEOUT   = 20
 
+# Enforce USPTO ODP burst=1: only one request in-flight per API key at a time.
+_API_LOCK    = threading.Lock()
+_RETRY_WAIT  = 5   # minimum seconds to wait after a 429 (USPTO recommendation)
+_MAX_RETRIES = 3   # retry attempts on 429 before giving up
+
 
 # ── Auth + low-level HTTP ─────────────────────────────────────────────────────
 
@@ -60,12 +71,34 @@ def _auth() -> tuple[dict, dict]:
 
 
 def _get(url: str, extra_params: dict | None = None) -> dict:
+    """
+    Single serialised GET with 429 retry.
+
+    _API_LOCK ensures only one request is in-flight at a time (burst=1).
+    On 429 we sleep inside the lock — this blocks other threads from firing
+    while the API is already rejecting requests, preventing a retry storm.
+    Wait time backs off: 5 s, 10 s, 15 s across successive attempts.
+    """
     p, h = _auth()
     if extra_params:
         p.update(extra_params)
-    r = requests.get(url, params=p, headers=h, timeout=_TIMEOUT, verify=False)
-    r.raise_for_status()
-    return r.json()
+
+    with _API_LOCK:
+        for attempt in range(1, _MAX_RETRIES + 1):
+            r = requests.get(url, params=p, headers=h, timeout=_TIMEOUT, verify=False)
+            if r.status_code == 429:
+                wait = _RETRY_WAIT * attempt      # 5 s → 10 s → 15 s
+                logging.warning(
+                    "USPTO API 429 Too Many Requests — waiting %d s before retry %d/%d",
+                    wait, attempt, _MAX_RETRIES,
+                )
+                time.sleep(wait)
+                continue
+            r.raise_for_status()
+            return r.json()
+        # All retries exhausted — surface the 429 as an HTTPError
+        r.raise_for_status()
+    return {}  # unreachable; satisfies type-checker
 
 
 def _apps_query(q: str, limit: int = PAGE_LIMIT, offset: int = 0) -> dict:
@@ -76,9 +109,14 @@ def _safe_query(q: str, limit: int = PAGE_LIMIT, offset: int = 0) -> dict:
     try:
         return _apps_query(q, limit, offset)
     except requests.HTTPError as e:
-        if e.response.status_code == 404:
-            return {}  # No results found � not a real error
-        logging.warning("USPTO API %s: %s", e.response.status_code, e.response.text[:300])
+        resp = e.response
+        if resp is not None and resp.status_code == 404:
+            return {}  # No results — not a real error
+        logging.warning(
+            "USPTO API %s: %s",
+            resp.status_code if resp is not None else "?",
+            resp.text[:300] if resp is not None else str(e),
+        )
     except requests.ConnectionError:
         logging.warning("Cannot reach USPTO API.")
     except Exception as e:
@@ -88,12 +126,11 @@ def _safe_query(q: str, limit: int = PAGE_LIMIT, offset: int = 0) -> dict:
 
 def _fetch_all(q: str, max_pages: int = MAX_PAGES) -> list[dict]:
     """
-    Fetch up to max_pages × PAGE_LIMIT records from the ODP.
+    Fetch up to max_pages x PAGE_LIMIT records from the ODP sequentially.
 
-    Strategy:
-    1. Fetch page 0 to learn the total count.
-    2. Calculate how many additional pages are needed (capped at max_pages-1).
-    3. Fetch remaining pages in parallel (up to 10 workers).
+    Pages are fetched one at a time to respect the USPTO burst limit of 1
+    concurrent request per API key.  Each _safe_query call acquires _API_LOCK
+    for the duration of its HTTP round-trip.
     """
     # Page 0 – also reveals total count
     data0 = _safe_query(q, limit=PAGE_LIMIT, offset=0)
@@ -107,25 +144,12 @@ def _fetch_all(q: str, max_pages: int = MAX_PAGES) -> list[dict]:
     pages_need = min(max_pages, -(-total // PAGE_LIMIT))  # ceiling division
     offsets    = [i * PAGE_LIMIT for i in range(1, pages_need)]
 
-    if not offsets:
-        return docs0
-
-    # Fetch remaining pages in parallel
-    results: dict[int, list[dict]] = {}
-    with ThreadPoolExecutor(max_workers=min(10, len(offsets))) as pool:
-        fut_map = {pool.submit(_safe_query, q, PAGE_LIMIT, off): off for off in offsets}
-        for fut in as_completed(fut_map):
-            off = fut_map[fut]
-            try:
-                data = fut.result()
-                results[off] = data.get("patentFileWrapperDataBag", []) if data else []
-            except Exception:
-                results[off] = []
-
-    # Reassemble in order
     all_docs = list(docs0)
     for off in offsets:
-        all_docs.extend(results.get(off, []))
+        data = _safe_query(q, PAGE_LIMIT, off)
+        if data:
+            all_docs.extend(data.get("patentFileWrapperDataBag", []))
+
     return all_docs
 
 
@@ -289,10 +313,21 @@ def search_ptab(
     try:
         p, h = _auth()
         p.update(params)
-        r = requests.get(_PTAB_URL, params=p, headers=h,
-                         timeout=_TIMEOUT, verify=False)
-        if r.status_code == 200:
-            return r.json().get("patentTrialDocumentDataBag", [])
+        with _API_LOCK:
+            for attempt in range(1, _MAX_RETRIES + 1):
+                r = requests.get(_PTAB_URL, params=p, headers=h,
+                                 timeout=_TIMEOUT, verify=False)
+                if r.status_code == 429:
+                    wait = _RETRY_WAIT * attempt
+                    logging.warning(
+                        "USPTO PTAB API 429 — waiting %d s before retry %d/%d",
+                        wait, attempt, _MAX_RETRIES,
+                    )
+                    time.sleep(wait)
+                    continue
+                if r.status_code == 200:
+                    return r.json().get("patentTrialDocumentDataBag", [])
+                break
     except Exception as e:
         logging.warning("PTAB API error: %s", e)
     return []
@@ -371,7 +406,6 @@ def _xml_to_text(xml_str: str) -> str:
         pass
 
     # Last resort: strip XML tags with regex.
-    # Some markup artifacts may remain, which is acceptable.
     text = _re.sub(r"<[^>]+>", " ", xml_str)
     text = _re.sub(r"\s{2,}", " ", text).strip()
     return text if text else xml_str
@@ -382,11 +416,19 @@ def fetch_oa_text(app_num: str, doc_identifier: str) -> str:
     clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
     url = f"https://api.uspto.gov/api/v1/download/applications/{clean}/{doc_identifier}/xmlarchive"
     p, h = _auth()
-    r = requests.get(url, params=p, headers=h, timeout=30, verify=False)
-    r.raise_for_status()
-    xml_str = _extract_xml_from_tar(r.content)
-    return _xml_to_text(xml_str)
-
+    with _API_LOCK:
+        for attempt in range(1, _MAX_RETRIES + 1):
+            r = requests.get(url, params=p, headers=h, timeout=30, verify=False)
+            if r.status_code == 429:
+                wait = _RETRY_WAIT * attempt
+                logging.warning("USPTO download 429 — waiting %d s (attempt %d/%d)", wait, attempt, _MAX_RETRIES)
+                time.sleep(wait)
+                continue
+            r.raise_for_status()
+            xml_str = _extract_xml_from_tar(r.content)
+            return _xml_to_text(xml_str)
+        r.raise_for_status()
+    return ""  # unreachable
 
 
 def _text_no_del(el):
@@ -424,8 +466,18 @@ def fetch_claims_text(app_num: str) -> str:
 
     dl_url = f"https://api.uspto.gov/api/v1/download/applications/{clean}/{doc_id}/xmlarchive"
     p, h = _auth()
-    r = requests.get(dl_url, params=p, headers=h, timeout=30, verify=False)
-    r.raise_for_status()
+    with _API_LOCK:
+        for attempt in range(1, _MAX_RETRIES + 1):
+            r = requests.get(dl_url, params=p, headers=h, timeout=30, verify=False)
+            if r.status_code == 429:
+                wait = _RETRY_WAIT * attempt
+                logging.warning("USPTO download 429 — waiting %d s (attempt %d/%d)", wait, attempt, _MAX_RETRIES)
+                time.sleep(wait)
+                continue
+            r.raise_for_status()
+            break
+        else:
+            r.raise_for_status()
 
     xml_str = _extract_xml_from_tar(r.content)
     xml_str = _re.sub(r"<\?[^?]+\?>", "", xml_str)
@@ -433,7 +485,6 @@ def fetch_claims_text(app_num: str) -> str:
     try:
         root = ET.fromstring(xml_str)
     except ET.ParseError:
-        # Fall back to generic text extraction if structured parse fails
         return _xml_to_text(xml_str)
 
     USPAT = "urn:us:gov:doc:uspto:patent"
@@ -454,8 +505,8 @@ def fetch_claims_text(app_num: str) -> str:
     if claims:
         return "\n\n".join(claims)
 
-    # No claim elements found — fall back to generic extraction
     return _xml_to_text(xml_str)
+
 
 @_cache
 def get_all_documents(app_num: str) -> list[dict]:
@@ -513,6 +564,15 @@ def fetch_pdf(app_num: str, doc_identifier: str) -> bytes:
     clean = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
     url = f"https://api.uspto.gov/api/v1/download/applications/{clean}/{doc_identifier}/pdf"
     p, h = _auth()
-    r = requests.get(url, params=p, headers=h, timeout=30, verify=False)
-    r.raise_for_status()
-    return r.content
+    with _API_LOCK:
+        for attempt in range(1, _MAX_RETRIES + 1):
+            r = requests.get(url, params=p, headers=h, timeout=30, verify=False)
+            if r.status_code == 429:
+                wait = _RETRY_WAIT * attempt
+                logging.warning("USPTO download 429 — waiting %d s (attempt %d/%d)", wait, attempt, _MAX_RETRIES)
+                time.sleep(wait)
+                continue
+            r.raise_for_status()
+            return r.content
+        r.raise_for_status()
+    return b""  # unreachable

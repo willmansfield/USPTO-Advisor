@@ -7,9 +7,11 @@ or prosecution tactics. The AI automatically fetches live USPTO data when needed
 
 import streamlit as st
 from utils.auth import require_auth, sidebar_user
+from utils.ui import inject_global_css
 from services import openai_service
 
 require_auth()
+inject_global_css()
 sidebar_user()
 
 st.title("💬 AI Patent Assistant")
@@ -52,13 +54,49 @@ SUGGESTIONS = [
 ]
 
 if not st.session_state.chat_messages:
-    st.markdown("### Suggested questions")
+    st.markdown(
+        "<p style='font-size:0.85rem;color:#64748b;font-weight:600;text-transform:uppercase;"
+        "letter-spacing:0.06em;margin-bottom:0.75rem;'>Try asking</p>",
+        unsafe_allow_html=True,
+    )
+
+    # Render pill buttons — one per suggestion, flowing wrap via columns
+    # We use a 2-col grid for consistent layout with Streamlit buttons
     col1, col2 = st.columns(2)
     for i, q in enumerate(SUGGESTIONS):
         col = col1 if i % 2 == 0 else col2
-        if col.button(q, use_container_width=True, key=f"sug_{i}"):
-            st.session_state.chat_messages.append({"role": "user", "content": q})
-            st.rerun()
+        with col:
+            if st.button(q, use_container_width=True, key=f"sug_{i}"):
+                st.session_state.chat_messages.append({"role": "user", "content": q})
+                st.rerun()
+
+    # Extra pill CSS to style the suggestion buttons differently
+    st.markdown("""
+    <style>
+    /* Style the suggestion buttons as pill-shaped prompts */
+    div[data-testid="stHorizontalBlock"] .stButton > button {
+        background: #eff6ff !important;
+        color: #1d4ed8 !important;
+        border: 1px solid #bfdbfe !important;
+        border-radius: 99px !important;
+        font-size: 0.8rem !important;
+        font-weight: 500 !important;
+        padding: 0.4rem 1rem !important;
+        text-align: left !important;
+        white-space: normal !important;
+        height: auto !important;
+        line-height: 1.4 !important;
+    }
+    div[data-testid="stHorizontalBlock"] .stButton > button:hover {
+        background: #dbeafe !important;
+        border-color: #93c5fd !important;
+        color: #1e40af !important;
+        box-shadow: none !important;
+        transform: none !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     st.markdown("---")
 
 # ── Chat history ──────────────────────────────────────────────────────────────
@@ -67,7 +105,7 @@ for msg in st.session_state.chat_messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg.get("tool_calls"):
-            with st.expander(f"📡 Live data fetched ({len(msg['tool_calls'])} call(s))"):
+            with st.expander(f"Live data fetched ({len(msg['tool_calls'])} call(s))"):
                 for tc in msg["tool_calls"]:
                     st.code(tc, language=None)
 
@@ -88,7 +126,7 @@ if prompt:
             )
         st.markdown(response)
         if tool_calls:
-            with st.expander(f"📡 Live data fetched ({len(tool_calls)} call(s))"):
+            with st.expander(f"Live data fetched ({len(tool_calls)} call(s))"):
                 for tc in tool_calls:
                     st.code(tc, language=None)
 

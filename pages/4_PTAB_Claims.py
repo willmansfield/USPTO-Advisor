@@ -9,13 +9,15 @@ import streamlit as st
 import pandas as pd
 
 from utils.auth import require_auth, sidebar_user
+from utils.ui import inject_global_css
 from services import uspto_api, openai_service
 from services.scoring import compute_examiner_score
 
 require_auth()
+inject_global_css()
 sidebar_user()
 
-st.title("⚖️ PTAB & Pre-filing")
+st.title("🏛️ PTAB & Pre-filing")
 
 tab_ptab, tab_claims = st.tabs(["🏛️ PTAB Research", "✅ Pre-filing Claim Check"])
 
@@ -25,8 +27,11 @@ tab_ptab, tab_claims = st.tabs(["🏛️ PTAB Research", "✅ Pre-filing Claim C
 # ══════════════════════════════════════════════════════════════════════════════
 
 with tab_ptab:
-    st.markdown("Search IPR, PGR, and CBM trial decisions from the USPTO Patent Trial and Appeal Board.")
-    st.markdown("")
+    st.markdown(
+        "<p style='color:#64748b;font-size:0.875rem;margin-bottom:1rem;'>"
+        "Search IPR, PGR, and CBM trial decisions from the USPTO Patent Trial and Appeal Board.</p>",
+        unsafe_allow_html=True,
+    )
 
     with st.form("ptab_form"):
         col_a, col_b, col_c = st.columns([3, 3, 1])
@@ -36,7 +41,7 @@ with tab_ptab:
             petitioner = st.text_input("Petitioner / challenger", placeholder="e.g. Samsung")
         with col_c:
             rows = st.number_input("Max results", min_value=5, max_value=100, value=25, step=5)
-        ptab_search = st.form_submit_button("Search PTAB", use_container_width=True)
+        ptab_search = st.form_submit_button("Search PTAB", use_container_width=True, type="primary")
 
     if not owner and not petitioner:
         st.info("Enter a patent owner or petitioner name to search PTAB decisions.")
@@ -51,7 +56,6 @@ with tab_ptab:
         else:
             st.success(f"Found **{len(decisions)}** decisions")
 
-            # ── Results table ─────────────────────────────────────────────────────
             table_rows = []
             for d in decisions:
                 table_rows.append({
@@ -75,7 +79,6 @@ with tab_ptab:
                 selection_mode="single-row",
             )
 
-            # ── Selected decision detail ───────────────────────────────────────────
             if event and event.selection.rows:
                 idx = event.selection.rows[0]
                 d = decisions[idx]
@@ -100,21 +103,18 @@ with tab_ptab:
                 trial_num = d.get("trialNumber", "")
                 if trial_num:
                     st.markdown(
-                        f"[📄 View on PTAB portal](https://ptab.uspto.gov/#/ptab-trial/{trial_num})",
-                        unsafe_allow_html=False,
+                        f"[View on PTAB portal ↗](https://ptab.uspto.gov/#/ptab-trial/{trial_num})",
                     )
 
-                # AI analysis
                 if openai_service._check():
                     st.markdown("#### AI Analysis")
-                    st.markdown(
-                        "Paste the full decision text below for AI analysis of legal issues and practical takeaways."
-                    )
+                    st.caption("Paste the full decision text below for AI analysis of legal issues and practical takeaways.")
                     decision_text = st.text_area(
-                        "Decision text", height=250, placeholder="Paste the full PTAB decision text here…",
-                        key=f"ptab_text_{idx}"
+                        "Decision text", height=250,
+                        placeholder="Paste the full PTAB decision text here…",
+                        key=f"ptab_text_{idx}",
                     )
-                    if st.button("Analyse decision", key=f"ptab_btn_{idx}") and decision_text:
+                    if st.button("Analyse decision", key=f"ptab_btn_{idx}", type="primary") and decision_text:
                         with st.spinner("Analysing decision…"):
                             analysis = openai_service.tag_ptab_decision(decision_text)
                         st.markdown(analysis)
@@ -128,11 +128,12 @@ with tab_ptab:
 
 with tab_claims:
     st.markdown(
+        "<p style='color:#64748b;font-size:0.875rem;margin-bottom:1.25rem;'>"
         "Paste your patent claims before filing to identify potential §102 novelty risks, "
         "§103 obviousness risks, §112 indefiniteness issues, and scope problems. "
-        "Optionally add a target art unit to tailor the analysis with live examiner statistics."
+        "Optionally add a target art unit to tailor the analysis with live examiner statistics.</p>",
+        unsafe_allow_html=True,
     )
-    st.markdown("")
 
     if not openai_service._check():
         st.warning("Add **OPENAI_API_KEY** to `.env` to use the claim checker.")
@@ -153,17 +154,15 @@ with tab_claims:
                 "Target art unit (optional)",
                 placeholder="e.g. 2143",
             )
-            st.markdown("<br>", unsafe_allow_html=True)
-            analyse = st.button("🔍 Analyse Claims", use_container_width=True, type="primary")
+            st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+            analyse = st.button("Analyse Claims", use_container_width=True, type="primary")
 
         if not claims_text:
             st.info("Paste your claims above and click 'Analyse Claims'.")
         else:
-            # Cache key based on claims + optional context inputs
             cache_key_claims = f"claim_check_{hash(claims_text + tech_area + target_au)}"
 
             if analyse and cache_key_claims not in st.session_state:
-                # Fetch art unit context if provided
                 tech_context = tech_area or ""
                 if target_au:
                     with st.spinner(f"Fetching art unit {target_au} statistics…"):
@@ -200,7 +199,7 @@ with tab_claims:
                 )
 
                 st.markdown("---")
-                with st.expander("💡 Tips for using this analysis"):
+                with st.expander("Tips for using this analysis"):
                     st.markdown("""
 - **§102 risks**: These suggest prior art may anticipate your claims. Consider narrowing the claim scope or adding distinguishing limitations.
 - **§103 risks**: Obviousness rejections are the most common. Identify the point of novelty and make it explicit in the independent claims.

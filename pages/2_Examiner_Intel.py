@@ -13,19 +13,19 @@ import plotly.graph_objects as go
 from collections import Counter, defaultdict
 
 from utils.auth import require_auth, sidebar_user
-from utils.ui import score_badge
+from utils.ui import inject_global_css, score_card_html, PLOTLY_THEME, OUTCOME_COLORS
 from services import uspto_api, openai_service
 from services.scoring import compute_examiner_score
 from services.uspto_api import meta, get_outcome
 
 require_auth()
+inject_global_css()
 sidebar_user()
 
 st.title("🔬 Examiner Intel")
 st.caption("Understand who examines your cases — and how to work with them effectively.")
 
 
-# Pre-fill from cross-page navigation
 default_examiner = st.session_state.pop("examiner_prefill", "") or ""
 
 tab_ex, tab_au = st.tabs(["👤 Examiner Profile", "🏛️ Art Unit Explorer"])
@@ -46,7 +46,7 @@ with tab_ex:
                 label_visibility="collapsed",
             )
         with col_b:
-            ex_search = st.form_submit_button("Search", use_container_width=True)
+            ex_search = st.form_submit_button("Search", use_container_width=True, type="primary")
 
     if not ex_name:
         st.info("Enter an examiner name to load their profile.")
@@ -59,7 +59,6 @@ with tab_ex:
         else:
             stats = compute_examiner_score(apps)
 
-            # Canonical name + primary art unit from the data
             names = [meta(a).get("examinerNameText", "") for a in apps]
             name_counts = Counter(n for n in names if n)
             canonical = name_counts.most_common(1)
@@ -69,7 +68,6 @@ with tab_ex:
             primary_au = Counter(au for au in art_units if au).most_common(1)
             primary_au_code = primary_au[0][0] if primary_au else "—"
 
-            # Disambiguation notice when multiple examiners are mixed in the sample
             unique_names = len(name_counts)
             if unique_names > 1:
                 st.info(
@@ -78,11 +76,17 @@ with tab_ex:
                     f"For a single examiner use **LAST, FIRST** format (e.g. `{canonical_name}`)."
                 )
 
-            # ── Score badge + headline ─────────────────────────────────────────────
-            st.markdown(f"## {canonical_name} &nbsp; · &nbsp; Art Unit {primary_au_code}")
-            st.markdown(score_badge(stats["score"], stats["band"], stats["color_hex"]),
-                        unsafe_allow_html=True)
-            st.markdown("<br>", unsafe_allow_html=True)
+            # ── Header ────────────────────────────────────────────────────────────
+            st.markdown(
+                f"<h2 style='margin-bottom:0.1rem;'>{canonical_name}</h2>"
+                f"<p style='color:#64748b;font-size:0.85rem;margin-bottom:1rem;'>Art Unit {primary_au_code}</p>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                score_card_html(stats["score"], stats["band"], stats["color_hex"], total=stats.get("total", 0)),
+                unsafe_allow_html=True,
+            )
+            st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
             # ── Key metrics ────────────────────────────────────────────────────────
             m1, m2, m3, m4, m5 = st.columns(5)
@@ -97,7 +101,7 @@ with tab_ex:
             # ── AI Brief ──────────────────────────────────────────────────────────
             brief_text = ""
             if openai_service._check():
-                st.markdown("### 🤖 AI Prosecution Brief")
+                st.markdown("### AI Prosecution Brief")
                 cache_key = f"ex_brief_{canonical_name}"
                 if cache_key not in st.session_state:
                     with st.spinner("Generating AI brief…"):
@@ -117,10 +121,10 @@ with tab_ex:
                 fig_donut = px.pie(
                     names=["Patented", "Abandoned", "Pending"],
                     values=[stats["patented"], stats["abandoned"], stats["pending"]],
-                    color_discrete_map={"Patented": "#2ecc71", "Abandoned": "#e74c3c", "Pending": "#95a5a6"},
-                    hole=0.5,
+                    color_discrete_map=OUTCOME_COLORS,
+                    hole=0.55,
                 )
-                fig_donut.update_layout(margin=dict(t=0, b=0), showlegend=True, height=260)
+                fig_donut.update_layout(**PLOTLY_THEME, showlegend=True, height=280)
                 st.plotly_chart(fig_donut, use_container_width=True)
 
             with col_charts2:
@@ -131,8 +135,12 @@ with tab_ex:
                 )
                 yr_df = pd.DataFrame(sorted(years.items()), columns=["Year", "Applications"])
                 yr_df = yr_df[yr_df["Year"].str.isdigit()]
-                fig_trend = px.line(yr_df, x="Year", y="Applications", markers=True)
-                fig_trend.update_layout(margin=dict(t=0, b=0), height=260)
+                fig_trend = px.line(
+                    yr_df, x="Year", y="Applications", markers=True,
+                    color_discrete_sequence=["#2563eb"],
+                )
+                fig_trend.update_traces(line=dict(width=2.5), marker=dict(size=7))
+                fig_trend.update_layout(**PLOTLY_THEME, height=280)
                 st.plotly_chart(fig_trend, use_container_width=True)
 
             st.markdown("---")
@@ -203,7 +211,7 @@ with tab_au:
                 label_visibility="collapsed",
             )
         with col_b:
-            au_search = st.form_submit_button("Search", use_container_width=True)
+            au_search = st.form_submit_button("Search", use_container_width=True, type="primary")
 
     if not au_code:
         st.info("Enter a 4-digit art unit code to explore the examiner landscape.")
@@ -217,10 +225,15 @@ with tab_au:
             au_stats = compute_examiner_score(au_apps)
 
             # ── Overall banner ────────────────────────────────────────────────────
-            st.markdown(f"## Art Unit {au_code}")
-            st.markdown(score_badge(au_stats["score"], au_stats["band"], au_stats["color_hex"]),
-                        unsafe_allow_html=True)
-            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown(
+                f"<h2 style='margin-bottom:0.1rem;'>Art Unit {au_code}</h2>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                score_card_html(au_stats["score"], au_stats["band"], au_stats["color_hex"], total=au_stats.get("total", 0)),
+                unsafe_allow_html=True,
+            )
+            st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Applications (sample)", au_stats["total"])
@@ -251,7 +264,6 @@ with tab_au:
                 })
             ex_rows.sort(key=lambda r: r["Score"], reverse=True)
 
-            # Score bar chart
             st.markdown("#### Examiner Scores — ranked easiest → hardest")
             bar_df = pd.DataFrame(ex_rows)
             fig_bar = go.Figure()
@@ -263,29 +275,26 @@ with tab_au:
                     showlegend=False,
                     hovertemplate=f"{row['Examiner']}<br>Score: {row['Score']}<br>Allowance: {row['Allowance %']}%<extra></extra>",
                 ))
+            bar_layout = {**PLOTLY_THEME, "height": 340, "margin": dict(t=10, b=90, l=10, r=10)}
             fig_bar.update_layout(
-                margin=dict(t=0, b=80), height=320,
-                xaxis=dict(tickangle=-40), yaxis=dict(range=[0, 100], title="Score"),
+                **bar_layout,
+                xaxis=dict(tickangle=-40, showgrid=False),
+                yaxis=dict(range=[0, 100], title="Score", gridcolor="#f1f5f9"),
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 
-            # Distribution pie
             band_counts = Counter(r["Band"] for r in ex_rows)
+            _BAND_COLORS = {"Easy": "#059669", "Moderate": "#d97706", "Difficult": "#dc2626"}
             fig_pie = px.pie(
                 names=list(band_counts.keys()),
                 values=list(band_counts.values()),
                 color=list(band_counts.keys()),
-                color_discrete_map={
-                    "Easy (Green)": "#2ecc71",
-                    "Moderate (Yellow)": "#f39c12",
-                    "Difficult (Red)": "#e74c3c",
-                },
+                color_discrete_map=_BAND_COLORS,
                 title="Difficulty distribution",
             )
-            fig_pie.update_layout(margin=dict(t=30, b=0), height=260)
+            fig_pie.update_layout(**PLOTLY_THEME, height=280, margin=dict(t=30, b=10, l=10, r=10))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-            # Roster table — click to load examiner profile
             st.markdown("#### Examiner Roster")
             display_cols = ["Examiner", "Apps", "Score", "Band", "Allowance %", "Avg OAs", "Avg Pendency (mo)"]
             roster_event = st.dataframe(

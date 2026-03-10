@@ -7,7 +7,7 @@ inline, AI-narrated prosecution summary, and instant OA analysis.
 
 import streamlit as st
 from utils.auth import require_auth, sidebar_user
-from utils.ui import score_badge
+from utils.ui import inject_global_css, score_card_html, timeline_html, score_badge
 from services import uspto_api, openai_service
 from services.scoring import compute_examiner_score
 from services.uspto_api import (
@@ -16,28 +16,14 @@ from services.uspto_api import (
 )
 
 require_auth()
+inject_global_css()
 sidebar_user()
 
 st.title("⚖️ Prosecution Hub")
 st.caption("Look up any application — see the full prosecution picture and get AI-powered next steps.")
 
-# ── Event colour coding ───────────────────────────────────────────────────────
-
-_EVENT_COLORS = {
-    "CTNF": ("#e74c3c", "🔴"),  "CTFR": ("#e74c3c", "🔴"),
-    "MCTNF": ("#e74c3c", "🔴"), "MCTFR": ("#e74c3c", "🔴"),
-    "RCE":  ("#e67e22", "🟠"),  "RCE2": ("#e67e22", "🟠"),
-    "M327": ("#2ecc71", "🟢"),  "MNDC": ("#2ecc71", "🟢"),  "MNAL": ("#2ecc71", "🟢"),
-    "FWDX": ("#2ecc71", "🟢"),  "ISSUE": ("#2ecc71", "🟢"),
-    "RESP": ("#3498db", "🔵"),  "A___": ("#3498db", "🔵"),
-}
-
-def _event_icon(code: str) -> str:
-    return _EVENT_COLORS.get(code, ("#95a5a6", "⚪"))[1]
-
 # ── Search ────────────────────────────────────────────────────────────────────
 
-# Pre-fill from cross-page navigation (e.g. click from Examiner Intel)
 default_app = st.session_state.pop("detail_app_num", "") or ""
 
 with st.form("hub_search"):
@@ -50,7 +36,7 @@ with st.form("hub_search"):
             label_visibility="collapsed",
         )
     with col_b:
-        search = st.form_submit_button("Load application", use_container_width=True)
+        search = st.form_submit_button("Load application", use_container_width=True, type="primary")
 
 if not app_num:
     st.info("Enter a USPTO application number above to get started.")
@@ -74,18 +60,26 @@ art_unit = m.get("groupArtUnitNumber", "")
 
 # ── Application header ────────────────────────────────────────────────────────
 
-status_icon = {"patented": "✅", "abandoned": "❌", "pending": "🔄"}.get(outcome, "❓")
+_STATUS_COLOR = {"patented": "#059669", "abandoned": "#dc2626", "pending": "#2563eb"}
+_STATUS_ICON  = {"patented": "✅", "abandoned": "❌", "pending": "🔄"}
+
+status_color = _STATUS_COLOR.get(outcome, "#64748b")
+status_icon  = _STATUS_ICON.get(outcome, "❓")
+
 st.markdown(f"## {status_icon} {m.get('inventionTitle', app_num)}")
+
+assignee = get_assignee(app_data)
+if assignee:
+    st.markdown(
+        f"<p style='color:#64748b;font-size:0.85rem;margin:-0.5rem 0 0.75rem;'>Assignee: <strong>{assignee}</strong></p>",
+        unsafe_allow_html=True,
+    )
 
 col_a, col_b, col_c, col_d = st.columns(4)
 col_a.metric("Status", m.get("applicationStatusDescriptionText", outcome.title()))
 col_b.metric("Filed", (m.get("filingDate") or "")[:10])
 col_c.metric("Art Unit", art_unit or "—")
 col_d.metric("Patent №" if patent else "Office Actions", patent if patent else count_office_actions(app_data))
-
-assignee = get_assignee(app_data)
-if assignee:
-    st.caption(f"Assignee: **{assignee}**")
 
 st.markdown("---")
 
@@ -100,13 +94,18 @@ if examiner_name:
 
     col_ex, col_link = st.columns([3, 1])
     with col_ex:
-        st.markdown("#### 👤 Examiner")
+        st.markdown("#### Examiner")
         if examiner_stats:
             st.markdown(
-                score_badge(examiner_stats["score"], examiner_stats["band"], examiner_stats["color_hex"], size="small"),
+                score_card_html(
+                    examiner_stats["score"],
+                    examiner_stats["band"],
+                    examiner_stats["color_hex"],
+                    total=examiner_stats.get("total", 0),
+                ),
                 unsafe_allow_html=True,
             )
-            st.markdown("")  # spacer
+            st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Allowance Rate", f"{examiner_stats['allowance_rate']}%")
             m2.metric("Avg Office Actions", examiner_stats["avg_oa"])
@@ -115,40 +114,34 @@ if examiner_name:
         else:
             st.write(f"**{examiner_name}** (no stats available)")
     with col_link:
-        st.markdown("#### &nbsp;")
-        if st.button("🔍 Full examiner profile", use_container_width=True):
+        st.markdown(f"<p style='font-weight:600;color:#1a3a5c;margin-bottom:0.5rem;'>{examiner_name}</p>", unsafe_allow_html=True)
+        if st.button("View full examiner profile →", use_container_width=True):
             st.session_state["examiner_prefill"] = examiner_name
             st.switch_page("pages/2_Examiner_Intel.py")
 
 st.markdown("---")
 
-# ── Tabs — Timeline is default (first) ───────────────────────────────────────
+# ── Tabs ──────────────────────────────────────────────────────────────────────
 
 tab_timeline, tab_ai, tab_docs = st.tabs(["📋 Prosecution Timeline", "🤖 AI Analysis", "📄 Documents"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Tab 1 – Prosecution Timeline  (default)
+# Tab 1 – Prosecution Timeline
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with tab_timeline:
-    if not events:
-        st.info("No prosecution events found.")
-    else:
-        st.markdown(f"**{len(events)} prosecution events** (most recent first)")
-        for e in reversed(events):
-            code = e.get("eventCode", "")
-            icon = _event_icon(code)
-            date = (e.get("eventDate") or "")[:10]
-            desc = e.get("eventDescriptionText", "")
-            st.markdown(
-                f"{icon} &nbsp; `{date}` &nbsp; **{code}** &nbsp; — &nbsp; {desc}",
-                unsafe_allow_html=False,
-            )
+    if events:
+        st.markdown(
+            f"<p style='color:#64748b;font-size:0.85rem;margin-bottom:1rem;'>"
+            f"<strong>{len(events)}</strong> prosecution events — most recent first</p>",
+            unsafe_allow_html=True,
+        )
+    st.markdown(timeline_html(events), unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Tab 2 – AI Analysis  (parallel load)
+# Tab 2 – AI Analysis
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with tab_ai:
@@ -157,20 +150,17 @@ with tab_ai:
     else:
         from concurrent.futures import ThreadPoolExecutor as _TPE
 
-        # ── Cache keys ────────────────────────────────────────────────────────
         cache_key_summary = f"summary_{app_num}"
 
-        # Fetch OA doc list upfront (cheap — cached after first call)
         oa_docs = uspto_api.get_oa_documents(app_num)
         latest_oa = oa_docs[0] if oa_docs else None
         _doc_id = latest_oa.get("documentIdentifier", "") if latest_oa else ""
-        cache_key_oa   = f"oa_analysis_{app_num}_{_doc_id}" if latest_oa else None
+        cache_key_oa    = f"oa_analysis_{app_num}_{_doc_id}" if latest_oa else None
         cache_key_strat = f"strategy_{app_num}_{_doc_id}"   if latest_oa else None
 
         need_summary = cache_key_summary not in st.session_state
         need_oa      = bool(cache_key_oa and cache_key_oa not in st.session_state)
 
-        # ── Build summary context (sync, no I/O) ──────────────────────────────
         event_summary = "\n".join(
             f"{e.get('eventDate','')[:10]}  [{e.get('eventCode','')}]  {e.get('eventDescriptionText','')}"
             for e in events[:30]
@@ -201,7 +191,6 @@ with tab_ai:
             "of the current position and recommended next steps. Be specific and professional."
         )
 
-        # ── Worker functions ──────────────────────────────────────────────────
         def _gen_summary():
             try:
                 return openai_service._chat(_sys_p, _ctx)
@@ -216,7 +205,6 @@ with tab_ai:
             except Exception as e:
                 return "", f"⚠️ Could not analyse office action: {e}"
 
-        # ── Phase 1: run summary + OA analysis in parallel ────────────────────
         tasks = {}
         if need_summary:
             tasks["summary"] = _gen_summary
@@ -242,12 +230,10 @@ with tab_ai:
                         elif k == "oa":
                             st.session_state[cache_key_oa] = result if isinstance(result, tuple) else ("", result)
 
-        # ── Display prosecution summary ───────────────────────────────────────
         st.markdown("### Prosecution Summary")
         st.markdown(st.session_state.get(cache_key_summary, ""))
         st.markdown("---")
 
-        # ── Display OA analysis ───────────────────────────────────────────────
         st.markdown("### Most Recent Office Action")
         if not oa_docs:
             st.info("No office actions found in the file wrapper for this application.")
@@ -261,7 +247,6 @@ with tab_ai:
             oa_text, oa_analysis = st.session_state.get(cache_key_oa, ("", ""))
             st.markdown(oa_analysis)
 
-            # ── Phase 2: response strategy (depends on OA text, sequential) ───
             if oa_text:
                 st.markdown("---")
                 st.markdown("### Response Strategy")
@@ -284,7 +269,6 @@ with tab_ai:
                         with st.spinner("Generating…"):
                             st.markdown(openai_service.response_strategy(oa_text, custom_claims))
 
-        # ── Export ────────────────────────────────────────────────────────────
         st.markdown("---")
         export_parts = [
             f"# Patent Analysis: {app_num}",
@@ -322,8 +306,11 @@ with tab_docs:
         clean_app = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
         pc_url = f"https://patentcenter.uspto.gov/applications/{clean_app}"
         col_hdr, col_pc = st.columns([3, 1])
-        col_hdr.markdown(f"**{len(docs)} documents** in the file wrapper")
-        col_pc.link_button("🔗 Patent Center", pc_url, use_container_width=True)
+        col_hdr.markdown(
+            f"<p style='color:#64748b;font-size:0.85rem;'><strong>{len(docs)}</strong> documents in the file wrapper</p>",
+            unsafe_allow_html=True,
+        )
+        col_pc.link_button("Patent Center ↗", pc_url, use_container_width=True)
 
         for doc in docs:
             code = doc.get("documentCode", "")
@@ -341,11 +328,17 @@ with tab_docs:
 
             col_info, col_btns = st.columns([3, 2])
             with col_info:
-                st.markdown(f"**{date}** &nbsp; `{code}` &nbsp; {desc}")
+                st.markdown(
+                    f"<p style='margin:0.1rem 0;font-size:0.85rem;'>"
+                    f"<span style='color:#64748b;'>{date}</span> &nbsp;"
+                    f"<code style='background:#f1f5f9;padding:1px 6px;border-radius:4px;font-size:0.75rem;'>{code}</code>"
+                    f"&nbsp; {desc}</p>",
+                    unsafe_allow_html=True,
+                )
             with col_btns:
                 btn_col, dl_col = st.columns(2)
                 if has_xml and doc_id:
-                    with st.expander("📝 Text"):
+                    with st.expander("Text"):
                         with st.spinner("Extracting…"):
                             try:
                                 text = uspto_api.fetch_document_text(app_num, doc_id)
@@ -357,7 +350,7 @@ with tab_docs:
                 if has_pdf and doc_id:
                     key_pdf = f"pdf_data_{doc_id}"
                     if key_pdf not in st.session_state:
-                        if dl_col.button("📄 Load PDF", key=f"btn_pdf_{doc_id}", use_container_width=True):
+                        if dl_col.button("Load PDF", key=f"btn_pdf_{doc_id}", use_container_width=True):
                             with st.spinner("Downloading PDF…"):
                                 try:
                                     st.session_state[key_pdf] = uspto_api.fetch_pdf(app_num, doc_id)

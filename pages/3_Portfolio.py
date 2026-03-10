@@ -6,7 +6,7 @@ filing trends, examiner concentration, art unit breakdown, and AI executive summ
 """
 
 import re as _re
-from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 import pandas as pd
@@ -14,11 +14,13 @@ import plotly.express as px
 from collections import Counter
 
 from utils.auth import require_auth, sidebar_user
+from utils.ui import inject_global_css, PLOTLY_THEME, OUTCOME_COLORS
 from services import uspto_api, openai_service, patentsview_api
 from services.scoring import compute_examiner_score
 from services.uspto_api import meta, get_outcome, get_patent_number, get_assignee
 
 require_auth()
+inject_global_css()
 sidebar_user()
 
 st.title("💼 Portfolio")
@@ -32,28 +34,19 @@ def _norm(name: str) -> str:
 
 
 def _run_disambiguation(term: str) -> list[dict]:
-    """
-    A: ODP first-page query → unique firstApplicantName variants + sample counts.
-    C: PatentsView query → enrich with granted-patent counts.
-    B: Parallel ODP count queries → total filing count per candidate.
-    Returns a list of row dicts sorted by ODP Filings desc.
-    """
-    # Step A + C in parallel
     with ThreadPoolExecutor(max_workers=2) as pool:
         fut_odp = pool.submit(uspto_api.get_applicant_name_variants, term)
         fut_pv  = pool.submit(patentsview_api.get_assignee_org_variants, term)
-        odp_variants = fut_odp.result()   # {odp_name: sample_count}
-        pv_variants  = fut_pv.result()    # {pv_org: grant_count}
+        odp_variants = fut_odp.result()
+        pv_variants  = fut_pv.result()
 
     if not odp_variants:
         return []
 
-    # Build candidate dict keyed by normalised name; ODP names are canonical
     cands: dict[str, dict] = {}
     for name, cnt in odp_variants.items():
         cands[_norm(name)] = {"Name": name, "_sample": cnt, "Granted (PatentsView)": 0}
 
-    # Enrich with PatentsView grant counts where normalised names align
     for pv_name, cnt in pv_variants.items():
         key = _norm(pv_name)
         if key in cands:
@@ -61,16 +54,12 @@ def _run_disambiguation(term: str) -> list[dict]:
 
     candidate_list = list(cands.values())[:8]
 
-    # Step B: parallel ODP total-count queries
-    with ThreadPoolExecutor(max_workers=len(candidate_list)) as pool:
-        fut_map = {pool.submit(uspto_api.odp_filing_count, c["Name"]): i
-                   for i, c in enumerate(candidate_list)}
-        for fut in _as_completed(fut_map):
-            i = fut_map[fut]
-            try:
-                candidate_list[i]["ODP Filings"] = fut.result()
-            except Exception:
-                candidate_list[i]["ODP Filings"] = candidate_list[i]["_sample"]
+    # Fetch ODP filing counts sequentially — USPTO burst limit is 1 (no parallel requests).
+    for c in candidate_list:
+        try:
+            c["ODP Filings"] = uspto_api.odp_filing_count(c["Name"])
+        except Exception:
+            c["ODP Filings"] = c["_sample"]
 
     rows = [
         {
@@ -88,7 +77,7 @@ def _run_disambiguation(term: str) -> list[dict]:
 
 prefill    = st.session_state.pop("portfolio_prefill", "") or ""
 search_term = st.session_state.get("portfolio_search_term", prefill)
-candidates  = st.session_state.get("portfolio_candidates")   # None = not yet run
+candidates  = st.session_state.get("portfolio_candidates")
 confirmed   = st.session_state.get("portfolio_confirmed", "")
 
 # ── Search form ───────────────────────────────────────────────────────────────
@@ -103,10 +92,9 @@ with st.form("portfolio_search_form"):
             label_visibility="collapsed",
         )
     with col_b:
-        find_btn = st.form_submit_button("🔍 Find candidates", use_container_width=True)
+        find_btn = st.form_submit_button("Find candidates", use_container_width=True, type="primary")
 
 if find_btn and entered:
-    # Clear downstream state on new/changed search
     st.session_state.pop("portfolio_candidates", None)
     st.session_state.pop("portfolio_confirmed", None)
     st.session_state["portfolio_search_term"] = entered
@@ -116,7 +104,6 @@ if find_btn and entered:
     candidates, confirmed, search_term = found, "", entered
     st.rerun()
 
-# Auto-run on cross-page navigation prefill
 if prefill and candidates is None:
     st.session_state["portfolio_search_term"] = prefill
     with st.spinner("Searching USPTO and PatentsView for matching companies…"):
@@ -157,7 +144,7 @@ if not confirmed:
 
     col_btn, _ = st.columns([2, 3])
     if col_btn.button(
-        "▶ Analyse this company",
+        "Analyse this company →",
         disabled=not selected_name,
         type="primary",
         use_container_width=True,
@@ -167,12 +154,12 @@ if not confirmed:
 
     st.stop()
 
-# ── Confirmed — show which company + allow change ────────────────────────────
+# ── Confirmed — show which company + allow change ─────────────────────────────
 
 company = confirmed
 col_hdr, col_chg = st.columns([5, 1])
 col_hdr.caption(f"Analysing: **{company}**")
-if col_chg.button("✏️ Change", use_container_width=True):
+if col_chg.button("Change company", use_container_width=True):
     st.session_state.pop("portfolio_confirmed", None)
     st.rerun()
 
@@ -187,26 +174,25 @@ if not apps:
 
 stats = compute_examiner_score(apps)
 
-# ── Header ────────────────────────────────────────────────────────────────────
+# ── Header & metrics ──────────────────────────────────────────────────────────
 
 st.markdown(f"## {company}")
-st.caption(f"Analysis based on {len(apps)} most recent applications")
+st.caption(f"Analysis based on {len(apps):,} most recent applications")
 
-# Headline metrics
 m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric("Total (sample)", stats["total"])
-m2.metric("Patented", stats["patented"])
-m3.metric("Abandoned", stats["abandoned"])
+m1.metric("Total (sample)", f"{stats['total']:,}")
+m2.metric("Patented", f"{stats['patented']:,}")
+m3.metric("Abandoned", f"{stats['abandoned']:,}")
 m4.metric("Allowance Rate", f"{stats['allowance_rate']}%")
 m5.metric("Avg Pendency", f"{stats['avg_pendency']} mo")
 
 st.markdown("---")
 
-# ── AI Executive Summary (always) ─────────────────────────────────────────────
+# ── AI Executive Summary ──────────────────────────────────────────────────────
 
 portfolio_summary_text = ""
 if openai_service._check():
-    st.markdown("### 🤖 AI Executive Summary")
+    st.markdown("### AI Executive Summary")
     cache_key = f"portfolio_summary_{company}"
     if cache_key not in st.session_state:
         with st.spinner("Generating AI executive summary…"):
@@ -248,8 +234,12 @@ with col1:
     )
     yr_df = pd.DataFrame(sorted(years.items()), columns=["Year", "Applications"])
     yr_df = yr_df[yr_df["Year"].str.isdigit()]
-    fig_trend = px.area(yr_df, x="Year", y="Applications", color_discrete_sequence=["#3498db"])
-    fig_trend.update_layout(margin=dict(t=0, b=0), height=280)
+    fig_trend = px.area(
+        yr_df, x="Year", y="Applications",
+        color_discrete_sequence=["#2563eb"],
+    )
+    fig_trend.update_traces(line=dict(width=2), fillcolor="rgba(37,99,235,0.12)")
+    fig_trend.update_layout(**PLOTLY_THEME, height=290)
     st.plotly_chart(fig_trend, use_container_width=True)
 
 with col2:
@@ -257,13 +247,13 @@ with col2:
     fig_donut = px.pie(
         names=["Patented", "Abandoned", "Pending"],
         values=[stats["patented"], stats["abandoned"], stats["pending"]],
-        color_discrete_map={"Patented": "#2ecc71", "Abandoned": "#e74c3c", "Pending": "#95a5a6"},
+        color_discrete_map=OUTCOME_COLORS,
         hole=0.55,
     )
-    fig_donut.update_layout(margin=dict(t=0, b=0), showlegend=True, height=280)
+    fig_donut.update_layout(**PLOTLY_THEME, showlegend=True, height=290)
     st.plotly_chart(fig_donut, use_container_width=True)
 
-# ── Charts row 2: top examiners + art units ────────────────────────────────────
+# ── Charts row 2: top examiners + art units ───────────────────────────────────
 
 col3, col4 = st.columns(2)
 
@@ -273,16 +263,14 @@ with col3:
     top_ex = examiners.most_common(15)
     if top_ex:
         ex_df = pd.DataFrame(top_ex, columns=["Examiner", "Applications"])
-        # Shorten to last name only for chart
         ex_df["Examiner"] = ex_df["Examiner"].apply(lambda n: n.split(",")[0] if n else n)
         fig_ex = px.bar(
             ex_df, x="Applications", y="Examiner", orientation="h",
-            color_discrete_sequence=["#9b59b6"],
+            color_discrete_sequence=["#2563eb"],
         )
-        fig_ex.update_layout(margin=dict(t=0, b=0), height=340,
-                             yaxis=dict(autorange="reversed"))
+        fig_ex.update_layout(**PLOTLY_THEME, height=360, yaxis=dict(autorange="reversed", showgrid=False))
         st.plotly_chart(fig_ex, use_container_width=True)
-    if st.button("🔍 Explore an examiner's full profile →"):
+    if st.button("Explore an examiner's full profile →"):
         st.switch_page("pages/2_Examiner_Intel.py")
 
 with col4:
@@ -294,10 +282,9 @@ with col4:
         au_df = au_df[au_df["Art Unit"].str.len() > 0]
         fig_au = px.bar(
             au_df, x="Applications", y="Art Unit", orientation="h",
-            color_discrete_sequence=["#e67e22"],
+            color_discrete_sequence=["#7c3aed"],
         )
-        fig_au.update_layout(margin=dict(t=0, b=0), height=340,
-                             yaxis=dict(autorange="reversed"))
+        fig_au.update_layout(**PLOTLY_THEME, height=360, yaxis=dict(autorange="reversed", showgrid=False))
         st.plotly_chart(fig_au, use_container_width=True)
 
 st.markdown("---")
