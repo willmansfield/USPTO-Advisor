@@ -6,11 +6,26 @@ load_dotenv()
 # ── USPTO API key (loaded from .env) ─────────────────────────────────────────
 USPTO_API_KEY = os.getenv("USPTO_API_KEY", "")
 
-# ── Credentials (plain text – PoC only) ──────────────────────────────────────
-USERS = {
-    "admin": {"name": "Administrator", "password": "admin123"},
-    "demo":  {"name": "Demo User",      "password": "demo123"},
-}
+# ── Credentials — loaded from Streamlit secrets manager ──────────────────────
+# Configure users in .streamlit/secrets.toml:
+#
+#   [users.alice]
+#   name     = "Alice Smith"
+#   password = "her-password"
+#
+# Falls back to empty dict when running outside Streamlit (e.g. API server).
+def _load_users() -> dict:
+    try:
+        import streamlit as st
+        raw = st.secrets.get("users", {})
+        return {
+            username: {"name": info["name"], "password": info["password"]}
+            for username, info in raw.items()
+        }
+    except Exception:
+        return {}
+
+USERS = _load_users()
 
 # ── USPTO APIs ────────────────────────────────────────────────────────────────
 # Primary: Patent Examination Data System (PEDS)
