@@ -112,11 +112,17 @@ def _safe_query(q: str, limit: int = PAGE_LIMIT, offset: int = 0) -> dict:
         return _apps_query(q, limit, offset)
     except requests.HTTPError as e:
         resp = e.response
-        if resp is not None and resp.status_code == 404:
+        status = resp.status_code if resp is not None else None
+        if status == 404:
             return {}  # No results — not a real error
+        if status == 413 and limit > 10:
+            # Payload too large — halve the page size and retry
+            smaller = max(limit // 2, 10)
+            logging.warning("USPTO API 413 — retrying with limit=%d", smaller)
+            return _safe_query(q, smaller, offset)
         logging.warning(
             "USPTO API %s: %s",
-            resp.status_code if resp is not None else "?",
+            status or "?",
             resp.text[:300] if resp is not None else str(e),
         )
     except requests.ConnectionError:
