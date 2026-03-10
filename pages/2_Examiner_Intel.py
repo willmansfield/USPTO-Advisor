@@ -74,7 +74,7 @@ with tab_ex:
             if unique_names > 1:
                 st.info(
                     f"**{len(apps)} applications** across **{unique_names} examiners** matching "
-                    f""{ex_name}". Stats reflect the combined sample. "
+                    f'"{ex_name}". Stats reflect the combined sample. '
                     f"For a single examiner use **LAST, FIRST** format (e.g. `{canonical_name}`)."
                 )
 

@@ -17,7 +17,7 @@ def _client():
         return None
     try:
         from openai import OpenAI
-        return OpenAI(api_key=OPENAI_API_KEY)
+        return OpenAI(api_key=OPENAI_API_KEY, base_url="https://us.api.openai.com/v1")
     except ImportError:
         return None
 

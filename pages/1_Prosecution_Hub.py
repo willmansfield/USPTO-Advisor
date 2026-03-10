@@ -286,7 +286,12 @@ with tab_docs:
     if not docs:
         st.info("No documents found in the file wrapper.")
     else:
-        st.markdown(f"**{len(docs)} documents** in the file wrapper")
+        clean_app = app_num.replace("/", "").replace(",", "").replace(" ", "").strip()
+        pc_url = f"https://patentcenter.uspto.gov/applications/{clean_app}"
+        col_hdr, col_pc = st.columns([3, 1])
+        col_hdr.markdown(f"**{len(docs)} documents** in the file wrapper")
+        col_pc.link_button("🔗 Patent Center", pc_url, use_container_width=True)
+
         for doc in docs:
             code = doc.get("documentCode", "")
             desc = doc.get("documentDescription", code)
@@ -301,12 +306,13 @@ with tab_docs:
                 for p in (doc.get("pageBag") or [])
             )
 
-            col_info, col_btns = st.columns([4, 1])
+            col_info, col_btns = st.columns([3, 2])
             with col_info:
                 st.markdown(f"**{date}** &nbsp; `{code}` &nbsp; {desc}")
             with col_btns:
+                btn_col, dl_col = st.columns(2)
                 if has_xml and doc_id:
-                    with st.expander("View text"):
+                    with st.expander("📝 Text"):
                         with st.spinner("Extracting…"):
                             try:
                                 text = uspto_api.fetch_document_text(app_num, doc_id)
@@ -315,3 +321,21 @@ with tab_docs:
                                 st.warning(f"Could not fetch document: {e}")
                         if text:
                             st.text_area("", value=text, height=300, key=f"doc_{doc_id}")
+                if has_pdf and doc_id:
+                    key_pdf = f"pdf_data_{doc_id}"
+                    if key_pdf not in st.session_state:
+                        if dl_col.button("📄 Load PDF", key=f"btn_pdf_{doc_id}", use_container_width=True):
+                            with st.spinner("Downloading PDF…"):
+                                try:
+                                    st.session_state[key_pdf] = uspto_api.fetch_pdf(app_num, doc_id)
+                                except Exception as e:
+                                    st.warning(f"PDF unavailable: {e}")
+                    else:
+                        dl_col.download_button(
+                            "⬇️ PDF",
+                            data=st.session_state[key_pdf],
+                            file_name=f"{code}_{date}_{doc_id}.pdf",
+                            mime="application/pdf",
+                            key=f"dl_pdf_{doc_id}",
+                            use_container_width=True,
+                        )
