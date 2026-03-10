@@ -282,11 +282,15 @@ with tab_au:
                     showlegend=False,
                     hovertemplate=f"{row['Examiner']}<br>Score: {row['Score']}<br>Allowance: {row['Allowance %']}%<extra></extra>",
                 ))
-            bar_layout = {**PLOTLY_THEME, "height": 340, "margin": dict(t=10, b=90, l=10, r=10)}
+            bar_layout = {
+                **PLOTLY_THEME,
+                "height": 340,
+                "margin": dict(t=10, b=90, l=10, r=10),
+                "xaxis": dict(tickangle=-40, showgrid=False),
+                "yaxis": dict(range=[0, 100], title="Score", gridcolor="#f1f5f9"),
+            }
             fig_bar.update_layout(
                 **bar_layout,
-                xaxis=dict(tickangle=-40, showgrid=False),
-                yaxis=dict(range=[0, 100], title="Score", gridcolor="#f1f5f9"),
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -299,7 +303,7 @@ with tab_au:
                 color_discrete_map=_BAND_COLORS,
                 title="Difficulty distribution",
             )
-            fig_pie.update_layout(**PLOTLY_THEME, height=280, margin=dict(t=30, b=10, l=10, r=10))
+            fig_pie.update_layout(**{**PLOTLY_THEME, "height": 280, "margin": dict(t=30, b=10, l=10, r=10)})
             st.plotly_chart(fig_pie, use_container_width=True)
 
             st.markdown("#### Examiner Roster")
