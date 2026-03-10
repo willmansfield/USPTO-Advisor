@@ -11,7 +11,6 @@ import plotly.express as px
 from collections import Counter
 
 from utils.auth import require_auth, sidebar_user
-from utils.ui import score_badge
 from services import uspto_api, openai_service
 from services.scoring import compute_examiner_score
 from services.uspto_api import meta, get_outcome, get_patent_number, get_assignee
@@ -59,16 +58,6 @@ stats = compute_examiner_score(apps)
 
 st.markdown(f"## {company}")
 st.caption(f"Analysis based on {len(apps)} most recent applications")
-st.markdown(
-    score_badge(
-        stats["score"],
-        f"Examiner Difficulty: {stats['band']}",
-        stats["color_hex"],
-        size="small",
-    ),
-    unsafe_allow_html=True,
-)
-st.markdown("<br>", unsafe_allow_html=True)
 
 # Headline metrics
 m1, m2, m3, m4, m5 = st.columns(5)
