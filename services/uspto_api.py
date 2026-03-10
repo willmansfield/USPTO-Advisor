@@ -25,6 +25,7 @@ import logging
 import time
 import urllib3
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config import (
     USPTO_API_KEY, PAGE_LIMIT, MAX_PAGES,
@@ -86,20 +87,46 @@ def _safe_query(q: str, limit: int = PAGE_LIMIT, offset: int = 0) -> dict:
 
 
 def _fetch_all(q: str, max_pages: int = MAX_PAGES) -> list[dict]:
-    """Paginate up to max_pages × PAGE_LIMIT records."""
-    records: list[dict] = []
-    for page in range(max_pages):
-        offset = page * PAGE_LIMIT
-        data = _safe_query(q, limit=PAGE_LIMIT, offset=offset)
-        if not data:
-            break
-        docs = data.get("patentFileWrapperDataBag", [])
-        records.extend(docs)
-        total = data.get("count", 0)
-        if offset + PAGE_LIMIT >= total or not docs:
-            break
-        time.sleep(0.25)
-    return records
+    """
+    Fetch up to max_pages × PAGE_LIMIT records from the ODP.
+
+    Strategy:
+    1. Fetch page 0 to learn the total count.
+    2. Calculate how many additional pages are needed (capped at max_pages-1).
+    3. Fetch remaining pages in parallel (up to 10 workers).
+    """
+    # Page 0 – also reveals total count
+    data0 = _safe_query(q, limit=PAGE_LIMIT, offset=0)
+    if not data0:
+        return []
+    docs0 = data0.get("patentFileWrapperDataBag", [])
+    if not docs0:
+        return []
+
+    total      = int(data0.get("count", 0))
+    pages_need = min(max_pages, -(-total // PAGE_LIMIT))  # ceiling division
+    offsets    = [i * PAGE_LIMIT for i in range(1, pages_need)]
+
+    if not offsets:
+        return docs0
+
+    # Fetch remaining pages in parallel
+    results: dict[int, list[dict]] = {}
+    with ThreadPoolExecutor(max_workers=min(10, len(offsets))) as pool:
+        fut_map = {pool.submit(_safe_query, q, PAGE_LIMIT, off): off for off in offsets}
+        for fut in as_completed(fut_map):
+            off = fut_map[fut]
+            try:
+                data = fut.result()
+                results[off] = data.get("patentFileWrapperDataBag", []) if data else []
+            except Exception:
+                results[off] = []
+
+    # Reassemble in order
+    all_docs = list(docs0)
+    for off in offsets:
+        all_docs.extend(results.get(off, []))
+    return all_docs
 
 
 # ── Field helpers ─────────────────────────────────────────────────────────────
