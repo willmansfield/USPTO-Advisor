@@ -33,8 +33,8 @@ OPENAI_MODEL   = "gpt-5-mini"
 
 # ── App settings ──────────────────────────────────────────────────────────────
 APP_TITLE   = "USPTO Advisor"
-PAGE_LIMIT  = 100  # records per ODP page (API max is 100)
-MAX_PAGES   = 20   # max pages to fetch (= 2 000 apps)
+PAGE_LIMIT  = 50   # records per ODP page (6 MB payload cap ≈ 50 safe max)
+MAX_PAGES   = 20   # max pages to fetch (= 1 000 apps)
 
 # Examiner difficulty thresholds (based on allowance rate %)
 SCORE_GREEN  = 60   # >= 60 % → Easy
