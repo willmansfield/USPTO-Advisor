@@ -98,21 +98,6 @@ with tab_ex:
 
             st.markdown("---")
 
-            # ── AI Brief ──────────────────────────────────────────────────────────
-            brief_text = ""
-            if openai_service._check():
-                st.markdown("### AI Prosecution Brief")
-                cache_key = f"ex_brief_{canonical_name}"
-                if cache_key not in st.session_state:
-                    with st.spinner("Generating AI brief…"):
-                        brief = openai_service.examiner_summary(canonical_name, stats)
-                        st.session_state[cache_key] = brief
-                brief_text = st.session_state[cache_key]
-                st.markdown(brief_text)
-                st.markdown("---")
-            else:
-                st.info("Add **OPENAI_API_KEY** to `.env` to enable AI prosecution briefs.")
-
             # ── Charts ────────────────────────────────────────────────────────────
             col_charts1, col_charts2 = st.columns(2)
 
@@ -172,6 +157,22 @@ with tab_ex:
                 selected_app = df.iloc[selected_idx]["App №"]
                 st.session_state["detail_app_num"] = selected_app
                 st.switch_page("pages/1_Prosecution_Hub.py")
+
+            st.markdown("---")
+
+            # ── AI Brief (after USPTO data is displayed) ───────────────────────────
+            brief_text = ""
+            if openai_service._check():
+                st.markdown("### AI Prosecution Brief")
+                cache_key = f"ex_brief_{canonical_name}"
+                if cache_key not in st.session_state:
+                    with st.spinner("Generating AI brief…"):
+                        brief = openai_service.examiner_summary(canonical_name, stats)
+                        st.session_state[cache_key] = brief
+                brief_text = st.session_state[cache_key]
+                st.markdown(brief_text)
+            else:
+                st.info("Add **OPENAI_API_KEY** to `.env` to enable AI prosecution briefs.")
 
             # ── Export ────────────────────────────────────────────────────────────
             if brief_text:

@@ -17,7 +17,7 @@ def _client():
         return None
     try:
         from openai import OpenAI
-        return OpenAI(api_key=OPENAI_API_KEY, base_url="https://us.api.openai.com/v1")
+        return OpenAI(api_key=OPENAI_API_KEY)
     except ImportError:
         return None
 
@@ -377,6 +377,43 @@ def portfolio_summary(entity: str, stats: dict, app_sample: list[dict]) -> str:
         + "Average OAs per app: " + str(stats.get("avg_oa", "N/A")) + "\n"
         + "Average pendency: " + str(stats.get("avg_pendency", "N/A")) + " months\n"
         + "Top 5 assigned examiners: " + str(top5) + "\n"
+    )
+    return _chat(sys_prompt, user_prompt)
+
+
+def law_firm_summary(firm_name: str, stats: dict, app_sample: list[dict]) -> str:
+    """AI narrative for a law firm's patent prosecution practice."""
+    if not _check():
+        return ""
+    sys_prompt = (
+        "You are a patent strategy consultant. Write a 3-4 paragraph executive briefing "
+        "on the patent prosecution practice of the given law firm based on their USPTO filing data. "
+        "Cover: overall prosecution success rate, the types of technology they handle, "
+        "their examiner relationships and difficulty patterns, their key client base, "
+        "and 3 specific strategic observations about their prosecution style."
+    )
+    from services.uspto_api import meta as _meta
+    top_clients: dict = {}
+    top_examiners: dict = {}
+    for a in app_sample:
+        m = _meta(a)
+        client = m.get("firstApplicantName", "Unknown")
+        top_clients[client] = top_clients.get(client, 0) + 1
+        ex = m.get("examinerNameText", "Unknown")
+        top_examiners[ex] = top_examiners.get(ex, 0) + 1
+    top5_clients  = sorted(top_clients.items(),  key=lambda x: x[1], reverse=True)[:5]
+    top5_examiners = sorted(top_examiners.items(), key=lambda x: x[1], reverse=True)[:5]
+    user_prompt = (
+        "Law firm: " + firm_name + "\n"
+        + "Total applications (sample): " + str(stats.get("total", "N/A")) + "\n"
+        + "Patented: " + str(stats.get("patented", "N/A")) + "\n"
+        + "Abandoned: " + str(stats.get("abandoned", "N/A")) + "\n"
+        + "Pending: " + str(stats.get("pending", "N/A")) + "\n"
+        + "Overall allowance rate: " + str(stats.get("allowance_rate", "N/A")) + " %\n"
+        + "Average OAs per app: " + str(stats.get("avg_oa", "N/A")) + "\n"
+        + "Average pendency: " + str(stats.get("avg_pendency", "N/A")) + " months\n"
+        + "Top 5 clients: " + str(top5_clients) + "\n"
+        + "Top 5 examiners: " + str(top5_examiners) + "\n"
     )
     return _chat(sys_prompt, user_prompt)
 

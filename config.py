@@ -43,7 +43,7 @@ PTAB_DEVHUB_URL  = "https://developer.uspto.gov/ptab-api/decisions"
 OA_TEXT_URL = "https://efts.uspto.gov/LATEST/search-index"
 
 # ── OpenAI ────────────────────────────────────────────────────────────────────
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY2", "")
 OPENAI_MODEL   = "gpt-5-mini"
 
 # ── App settings ──────────────────────────────────────────────────────────────

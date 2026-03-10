@@ -576,3 +576,48 @@ def fetch_pdf(app_num: str, doc_identifier: str) -> bytes:
             return r.content
         r.raise_for_status()
     return b""  # unreachable
+
+
+@_cache
+def get_law_firm_name_variants(term: str) -> dict:
+    """
+    Fetch first 50 ODP results for *term* searched against corresOrganizationName
+    and return a dict of {name: count_in_sample} for unique firm names found.
+    """
+    from collections import Counter as _Counter
+    first_word = term.split()[0]
+    for q in [
+        f'applicationMetaData.corresOrganizationName:"{term}"',
+        f"applicationMetaData.corresOrganizationName:{first_word}",
+    ]:
+        data = _safe_query(q, limit=50)
+        docs = data.get("patentFileWrapperDataBag", [])
+        if docs:
+            counts = _Counter(
+                meta(d).get("corresOrganizationName", "")
+                for d in docs
+                if meta(d).get("corresOrganizationName")
+            )
+            if counts:
+                return dict(counts.most_common(10))
+    return {}
+
+
+@_cache
+def law_firm_filing_count(name: str) -> int:
+    """Return total ODP application count for an exact law firm name match."""
+    data = _safe_query(f'applicationMetaData.corresOrganizationName:"{name}"', limit=1)
+    return int(data.get("count", 0))
+
+
+@_cache
+def search_by_law_firm(firm_name: str) -> list[dict]:
+    """Fetch applications where the correspondent is the given law firm."""
+    for q in [
+        f'applicationMetaData.corresOrganizationName:"{firm_name}"',
+        f"applicationMetaData.corresOrganizationName:{firm_name.split()[0]}",
+    ]:
+        apps = _fetch_all(q)
+        if apps:
+            return apps
+    return []
