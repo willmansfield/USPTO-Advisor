@@ -413,12 +413,15 @@ class OpenAIAgent:
 
         for _round in range(6):  # max 6 tool-call rounds
             try:
+                logger.info("OpenAI request: round=%d model=%s messages=%d", _round, self.model, len(api_messages))
                 resp = client.chat.completions.create(
                     model=self.model,
                     messages=api_messages,
                     tools=_TOOLS,
                     tool_choice="auto",
+                    timeout=60,
                 )
+                logger.info("OpenAI response received: round=%d finish_reason=%s", _round, resp.choices[0].finish_reason)
             except Exception as e:
                 logger.error("OpenAI API error: %s", e)
                 yield {"type": "error", "error": str(e)}

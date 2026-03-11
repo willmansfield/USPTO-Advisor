@@ -4,10 +4,13 @@ USPTO Patent AI – Flask application.
 Bridges the synchronous OpenAIAgent to Flask routes using SSE streaming.
 """
 
+import logging
 import os
 import sys
 import json
 from functools import wraps
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
