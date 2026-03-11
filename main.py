@@ -125,7 +125,8 @@ def chat_stream():
             traceback.print_exc()
             yield sse({"type": "error", "error": str(e)})
 
-    return Response(generate(user_message), mimetype="text/plain")
+    return Response(generate(user_message), mimetype="text/event-stream",
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
 
 
 @app.route("/clear", methods=["POST"])
