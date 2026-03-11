@@ -928,16 +928,24 @@
 
             const reader  = res.body.getReader();
             const decoder = new TextDecoder();
+            let sseBuffer = '';
 
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
 
-                const chunk = decoder.decode(value, { stream: true });
-                for (const line of chunk.split('\n')) {
-                    if (line.startsWith('data: ')) {
-                        try { handleEvent(JSON.parse(line.slice(6))); }
-                        catch (e) { console.error('SSE parse error', e); }
+                sseBuffer += decoder.decode(value, { stream: true });
+
+                // Only process complete SSE events (delimited by \n\n)
+                const events = sseBuffer.split('\n\n');
+                sseBuffer = events.pop(); // keep any incomplete trailing event
+
+                for (const eventBlock of events) {
+                    for (const line of eventBlock.split('\n')) {
+                        if (line.startsWith('data: ')) {
+                            try { handleEvent(JSON.parse(line.slice(6))); }
+                            catch (e) { console.error('SSE parse error', e); }
+                        }
                     }
                 }
             }
