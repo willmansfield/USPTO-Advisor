@@ -8,7 +8,7 @@ USPTO_API_KEY = os.getenv("USPTO_API_KEY", "")
 
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL   = "gpt-5.4"
+OPENAI_MODEL   = "gpt-5-mini"
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 # Loaded from .env as comma-separated user:password pairs
