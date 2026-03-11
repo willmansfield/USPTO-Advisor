@@ -485,9 +485,11 @@ class OpenAIAgent:
 
         # Fallback if we exhausted all rounds
         try:
+            logger.info("OpenAI fallback request: model=%s messages=%d", self.model, len(api_messages))
             resp = client.chat.completions.create(
                 model=self.model,
                 messages=api_messages,
+                timeout=60,
             )
             response_text = (resp.choices[0].message.content or "").strip()
             self.chat_history.append({"role": "assistant", "content": response_text})
