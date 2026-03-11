@@ -436,7 +436,6 @@ class OpenAIAgent:
                 yield {
                     "type":     "final_response",
                     "response": response_text,
-                    "history":  self.chat_history,
                 }
                 return
 
@@ -496,7 +495,6 @@ class OpenAIAgent:
             yield {
                 "type":     "final_response",
                 "response": response_text,
-                "history":  self.chat_history,
             }
         except Exception as e:
             yield {"type": "error", "error": str(e)}
